@@ -1,0 +1,49 @@
+.app-layout {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: #090d16;
+  background-image: 
+    radial-gradient(at 10% 20%, rgba(59, 130, 246, 0.05) 0px, transparent 50%),
+    radial-gradient(at 90% 80%, rgba(99, 102, 241, 0.05) 0px, transparent 50%);
+}
+
+.main-content {
+  flex: 1;
+  padding-bottom: 2rem;
+}
+
+.app-footer {
+  border-top: 1px solid #1e293b;
+  background: #0b0f19;
+  padding: 1rem 1.5rem;
+  color: #64748b;
+  font-size: 0.78rem;
+}
+
+.footer-inner {
+  max-width: 1240px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.footer-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+}
+
+.footer-right {
+  color: #475569;
+}

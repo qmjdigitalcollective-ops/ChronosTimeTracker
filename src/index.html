@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>TimeTracker Pro - Offline & Cloud</title>
+    <base href="/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Local offline-first time tracker with automated screenshots and Supabase Cloud sync" />
+    <meta name="theme-color" content="#0f172a" />
+    <link rel="icon" type="image/x-icon" href="favicon.ico" />
+    <link rel="manifest" href="manifest.json" />
+  </head>
+  <body>
+    <app-root></app-root>
+    <script>
+      if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(err => {
+            console.log('ServiceWorker registration omitted in dev mode:', err);
+          });
+        });
+      }
+    </script>
+  </body>
+</html>

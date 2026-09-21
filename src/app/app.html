@@ -1,0 +1,26 @@
+<div class="app-layout">
+  @if (!authService.isLoggedIn()) {
+    <app-login></app-login>
+  } @else {
+    <app-navbar (roleChange)="onRoleChange($event)"></app-navbar>
+
+    <main class="main-content">
+      @if (authService.isAdmin()) {
+        <app-admin-dashboard></app-admin-dashboard>
+      }
+      <app-user-tracker></app-user-tracker>
+    </main>
+
+    <footer class="app-footer">
+      <div class="footer-inner">
+        <div class="footer-left">
+          <span class="footer-dot"></span>
+          <span>Offline-First Engine: Local IndexedDB • Synchronizes to Firebase Cloud</span>
+        </div>
+        <div class="footer-right">
+          <span>Logged in as {{ authService.currentUser()?.name }} ({{ authService.isAdmin() ? 'Admin' : 'Normal User' }})</span>
+        </div>
+      </div>
+    </footer>
+  }
+</div>
