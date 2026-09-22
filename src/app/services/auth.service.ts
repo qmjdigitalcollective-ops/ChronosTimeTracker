@@ -76,6 +76,20 @@ export class AuthService {
     return { success: true, message: `Welcome back, ${employee.name}!` };
   }
 
+  async loginByUsername(username: string, pin?: string): Promise<{ success: boolean; message: string }> {
+    if (!username || !username.trim()) {
+      return { success: false, message: 'Please enter your username.' };
+    }
+    const employees = await this.offlineStorage.getEmployees();
+    const match = employees.find(
+      (e) => e.active && e.name.trim().toLowerCase() === username.trim().toLowerCase()
+    );
+    if (!match) {
+      return { success: false, message: 'Username not found. Please check your name.' };
+    }
+    return this.loginUser(match.id, pin);
+  }
+
   async loginAdmin(pin: string): Promise<{ success: boolean; message: string }> {
     const settings = await this.offlineStorage.getSettings();
     const targetAdminPin = settings.adminPin || 'admin123';

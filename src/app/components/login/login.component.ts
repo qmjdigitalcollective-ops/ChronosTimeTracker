@@ -1,11 +1,7 @@
-import { Component, OnInit, signal } from '@angular/core';
+import { Component, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AuthService } from '../../services/auth.service';
-import { OfflineStorageService } from '../../services/offline-storage.service';
-import { Employee } from '../../models/time-tracker.models';
-
-type LoginMode = 'employee' | 'admin';
 
 @Component({
   selector: 'app-login',
@@ -23,51 +19,49 @@ type LoginMode = 'employee' | 'admin';
             </svg>
           </div>
           <h2 class="brand-title">TimeTrack Pro</h2>
-          <p class="brand-desc">Offline Time Tracker & Automated Cloud Sync</p>
+          <p class="brand-desc">Offline Time Tracker &amp; Automated Cloud Sync</p>
         </div>
 
         <!-- Login Form -->
+        <form class="login-form" (submit)="onSubmit($event)">
+          <div class="form-group">
+            <label class="form-label" for="username-input">Username</label>
+            <input
+              id="username-input"
+              type="text"
+              class="form-input"
+              placeholder="Enter your full name"
+              [(ngModel)]="username"
+              name="username"
+              autocomplete="username"
+              autofocus
+            />
+          </div>
 
-          <form class="login-form" (submit)="onEmployeeSubmit($event)">
-            <div class="form-group">
-              <label class="form-label">Select Your Name</label>
-              <select
-                class="form-select"
-                [ngModel]="selectedEmployeeId()"
-                (ngModelChange)="selectedEmployeeId.set($event)"
-                name="employeeId"
-              >
-                @for (emp of employees(); track emp.id) {
-                  <option [value]="emp.id">
-                    {{ emp.name }} • {{ emp.department || 'Staff' }} (\${{ emp.hourlyRate }}/hr)
-                  </option>
-                }
-              </select>
+          <div class="form-group">
+            <label class="form-label" for="pin-input">PIN Code</label>
+            <input
+              id="pin-input"
+              type="password"
+              class="form-input"
+              placeholder="Enter your PIN"
+              [(ngModel)]="pin"
+              name="pin"
+              autocomplete="current-password"
+              maxlength="10"
+            />
+          </div>
+
+          @if (errorMessage()) {
+            <div class="error-banner">
+              ⚠️ {{ errorMessage() }}
             </div>
+          }
 
-            <div class="form-group">
-              <label class="form-label">Employee PIN Code</label>
-              <input
-                type="password"
-                class="form-input"
-                placeholder="Enter 4-digit PIN"
-                [(ngModel)]="employeePin"
-                name="pin"
-                autocomplete="current-password"
-                maxlength="10"
-              />
-            </div>
-
-            @if (errorMessage()) {
-              <div class="error-banner">
-                ⚠️ {{ errorMessage() }}
-              </div>
-            }
-
-            <button type="submit" class="btn-submit" [disabled]="loading()">
-              {{ loading() ? 'Signing In...' : 'Clock In / Start Tracking' }}
-            </button>
-          </form>
+          <button type="submit" class="btn-submit" [disabled]="loading()">
+            {{ loading() ? 'Signing In...' : 'Clock In / Start Tracking' }}
+          </button>
+        </form>
 
         <div class="login-footer">
           <span class="offline-badge">
@@ -123,14 +117,6 @@ type LoginMode = 'employee' | 'admin';
       color: #94a3b8;
       margin: 4px 0 0 0;
     }
-    .tab-btn:hover {
-      color: #f8fafc;
-    }
-    .tab-btn.active {
-      background: #3b82f6;
-      color: white;
-      box-shadow: 0 2px 8px rgba(59, 130, 246, 0.4);
-    }
     .login-form {
       display: flex;
       flex-direction: column;
@@ -146,12 +132,7 @@ type LoginMode = 'employee' | 'admin';
       font-weight: 600;
       color: #cbd5e1;
     }
-    .form-label {
-      font-size: 0.82rem;
-      font-weight: 600;
-      color: #cbd5e1;
-    }
-    .form-select, .form-input {
+    .form-input {
       background: #0f172a;
       border: 1px solid #334155;
       border-radius: 10px;
@@ -160,18 +141,11 @@ type LoginMode = 'employee' | 'admin';
       font-size: 0.95rem;
       outline: none;
       transition: border-color 0.15s ease;
+      width: 100%;
+      box-sizing: border-box;
     }
-    .form-select:focus, .form-input:focus {
+    .form-input:focus {
       border-color: #3b82f6;
-    }
-    .error-banner {
-      background: rgba(239, 68, 68, 0.15);
-      border: 1px solid rgba(239, 68, 68, 0.3);
-      color: #f87171;
-      padding: 10px 14px;
-      border-radius: 8px;
-      font-size: 0.82rem;
-      font-weight: 500;
     }
     .error-banner {
       background: rgba(239, 68, 68, 0.15);
@@ -194,10 +168,6 @@ type LoginMode = 'employee' | 'admin';
       transition: all 0.15s ease;
       box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
       margin-top: 0.5rem;
-    }
-    .btn-submit:hover:not(:disabled) {
-      background: linear-gradient(135deg, #1d4ed8, #1e40af);
-      transform: translateY(-1px);
     }
     .btn-submit:hover:not(:disabled) {
       background: linear-gradient(135deg, #1d4ed8, #1e40af);
@@ -228,32 +198,20 @@ type LoginMode = 'employee' | 'admin';
     }
   `],
 })
-export class LoginComponent implements OnInit {
-  employees = signal<Employee[]>([]);
-  selectedEmployeeId = signal<string>('');
-  employeePin = '';
+export class LoginComponent {
+  username = '';
+  pin = '';
   errorMessage = signal<string | null>(null);
   loading = signal<boolean>(false);
 
-  constructor(
-    private authService: AuthService,
-    private offlineStorage: OfflineStorageService
-  ) {}
+  constructor(private authService: AuthService) {}
 
-  async ngOnInit(): Promise<void> {
-    const list = await this.offlineStorage.getEmployees();
-    this.employees.set(list);
-    if (list.length > 0) {
-      this.selectedEmployeeId.set(list[1]?.id || list[0].id);
-    }
-  }
-
-  async onEmployeeSubmit(event: Event): Promise<void> {
+  async onSubmit(event: Event): Promise<void> {
     event.preventDefault();
     this.errorMessage.set(null);
     this.loading.set(true);
 
-    const res = await this.authService.loginUser(this.selectedEmployeeId(), this.employeePin);
+    const res = await this.authService.loginByUsername(this.username, this.pin);
     this.loading.set(false);
 
     if (!res.success) {
