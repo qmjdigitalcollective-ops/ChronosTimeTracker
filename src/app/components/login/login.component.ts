@@ -25,12 +25,12 @@ import { AuthService } from '../../services/auth.service';
         <!-- Login Form -->
         <form class="login-form" (submit)="onSubmit($event)">
           <div class="form-group">
-            <label class="form-label" for="username-input">Username</label>
+            <label class="form-label" for="username-input">Employee ID</label>
             <input
               id="username-input"
               type="text"
               class="form-input"
-              placeholder="Enter your full name"
+              placeholder="e.g. emp-1"
               [(ngModel)]="username"
               name="username"
               autocomplete="username"

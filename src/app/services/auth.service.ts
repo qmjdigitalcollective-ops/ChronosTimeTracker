@@ -78,14 +78,14 @@ export class AuthService {
 
   async loginByUsername(username: string, pin?: string): Promise<{ success: boolean; message: string }> {
     if (!username || !username.trim()) {
-      return { success: false, message: 'Please enter your username.' };
+      return { success: false, message: 'Please enter your Employee ID.' };
     }
     const employees = await this.offlineStorage.getEmployees();
     const match = employees.find(
-      (e) => e.active && e.name.trim().toLowerCase() === username.trim().toLowerCase()
+      (e) => e.active && e.id.trim().toLowerCase() === username.trim().toLowerCase()
     );
     if (!match) {
-      return { success: false, message: 'Username not found. Please check your name.' };
+      return { success: false, message: 'Employee ID not found. Please check your ID.' };
     }
     return this.loginUser(match.id, pin);
   }
