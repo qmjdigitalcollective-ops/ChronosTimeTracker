@@ -20,8 +20,8 @@ import { UserRole } from '../../models/time-tracker.models';
             </svg>
           </div>
           <div class="brand-text">
-            <span class="brand-name">TimeTrack</span>
-            <span class="brand-tag">Offline Pro</span>
+            <span class="brand-name">Chronos</span>
+            <span class="brand-tag">Time Tracker</span>
           </div>
         </div>
 

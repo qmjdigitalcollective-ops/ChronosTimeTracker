@@ -1933,7 +1933,7 @@ export class AdminDashboardComponent implements OnInit {
 
   async exportBackup(): Promise<void> {
     const json = await this.offlineStorage.exportAllData();
-    this.downloadFile(json, `timetracker_backup_${Date.now()}.json`, 'application/json');
+    this.downloadFile(json, `chronos_backup_${Date.now()}.json`, 'application/json');
   }
 
   async importBackup(event: any): Promise<void> {

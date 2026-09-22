@@ -19,7 +19,7 @@ import { AuthService } from '../../services/auth.service';
             </svg>
           </div>
           <h2 class="brand-title">Chronos Time Tracker</h2>
-         
+          <p class="brand-desc">Offline Time Tracking &amp; Automated Cloud Sync</p>
         </div>
 
         <!-- Login Form -->
