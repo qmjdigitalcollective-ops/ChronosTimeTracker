@@ -18,8 +18,8 @@ import { AuthService } from '../../services/auth.service';
               <polyline points="12 6 12 12 16 14"></polyline>
             </svg>
           </div>
-          <h2 class="brand-title">TimeTrack Pro</h2>
-          <p class="brand-desc">Offline Time Tracker &amp; Automated Cloud Sync</p>
+          <h2 class="brand-title">Chronos Time Tracker</h2>
+         
         </div>
 
         <!-- Login Form -->
@@ -204,7 +204,7 @@ export class LoginComponent {
   errorMessage = signal<string | null>(null);
   loading = signal<boolean>(false);
 
-  constructor(private authService: AuthService) {}
+  constructor(private authService: AuthService) { }
 
   async onSubmit(event: Event): Promise<void> {
     event.preventDefault();
