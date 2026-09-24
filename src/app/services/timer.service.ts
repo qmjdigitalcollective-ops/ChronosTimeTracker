@@ -109,6 +109,35 @@ export class TimerService {
       return false;
     }
 
+    // Also check the database, not just this tab's memory — catches an active
+    // timer started from another device or tab before this one loaded it.
+    const existing = await this.db.getActiveTimeEntry(employee.id);
+    if (existing) {
+      console.warn('An active session already exists for this person on another device/tab');
+      await this.restoreActiveSession(employee.id);
+      return false;
+    }
+
+    // Pay rate for this member on this client (Contracts), else their default rate
+    const contracts = await this.db.getContracts();
+    const hourlyRate = payRateFor(contracts, employee, client.id);
+
+    // A contract's weekly hour limit is a hard stop, not just a warning on the
+    // admin's Contracts page — check hours already logged this week before starting.
+    const contract = contracts.find((c) => c.employeeId === employee.id && c.clientId === client.id && c.active !== false);
+    if (contract?.weeklyLimitHours) {
+      const now = new Date();
+      const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+      const weekEntries = await this.db.getTimeEntries({ employeeId: employee.id, since: monday.getTime() });
+      const hoursThisWeek =
+        weekEntries.filter((e) => e.clientId === client.id).reduce((acc, e) => acc + e.durationSeconds, 0) / 3600;
+      if (hoursThisWeek >= contract.weeklyLimitHours) {
+        throw new Error(
+          `Weekly limit reached for ${client.name} (${contract.weeklyLimitHours}h). Ask an admin to raise it if this is expected.`
+        );
+      }
+    }
+
     const cleanTask = taskDescription.trim() || 'General work';
 
     // Request screen permission on clock-in
@@ -116,10 +145,6 @@ export class TimerService {
 
     const settings = await this.db.getSettings();
     this.intervalMinutes = settings.screenshotIntervalMinutes || 10;
-
-    // Pay rate for this member on this client (Contracts), else their default rate
-    const contracts = await this.db.getContracts();
-    const hourlyRate = payRateFor(contracts, employee, client.id);
     this.screenshotsAllowed = effectivePermissions(await this.db.getPermissions(), employee).screenshots;
 
     const now = Date.now();

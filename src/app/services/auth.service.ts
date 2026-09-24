@@ -141,9 +141,15 @@ export class AuthService {
 
   async loginAdmin(pin: string): Promise<{ success: boolean; message: string }> {
     const settings = await this.db.getSettings();
-    const targetAdminPin = settings.adminPin || 'admin123';
+    const targetAdminPin = settings.adminPin?.trim();
 
-    if (!pin || pin.trim() !== targetAdminPin.trim()) {
+    // No silent fallback to a guessable default PIN. If nobody has set a real
+    // Admin PIN yet, refuse instead of quietly accepting a well-known value.
+    if (!targetAdminPin) {
+      return { success: false, message: 'Admin PIN has not been set up yet. Set one in Settings first.' };
+    }
+
+    if (!pin || pin.trim() !== targetAdminPin) {
       return { success: false, message: 'Incorrect Admin PIN. Access denied.' };
     }
 

@@ -21,7 +21,9 @@ import {
 
 const DEFAULT_SETTINGS: AppSettings = {
   screenshotIntervalMinutes: 10,
-  adminPin: 'admin123',
+  // Deliberately blank, not a guessable default like 'admin123' — an admin
+  // must set a real PIN in Settings before Admin sign-in will work.
+  adminPin: '',
   allowMockScreenshotsIfDenied: true,
 };
 
