@@ -1,26 +1,25 @@
-import { Component, output, signal } from '@angular/core';
+import { Component, effect, output, signal, untracked } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AuthService } from '../../services/auth.service';
 import { SupabaseSyncService, SyncResult } from '../../services/google-sync.service';
 import { UserRole } from '../../models/time-tracker.models';
+import { IconComponent } from '../icon/icon.component';
+import { TimerService } from '../../services/timer.service';
+import { NavService } from '../../services/nav.service';
+import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
 
 @Component({
   selector: 'app-navbar',
   standalone: true,
-  imports: [CommonModule, FormsModule],
+  imports: [CommonModule, FormsModule, IconComponent, FormatDurationPipe],
   template: `
     <header class="navbar-container">
       <div class="navbar-left">
         <div class="brand">
-          <div class="brand-logo">
-            <svg viewBox="0 0 24 24" width="22" height="22" stroke="currentColor" stroke-width="2.2" fill="none" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>
-          </div>
+          <img class="brand-logo" src="auravia-mark.png" alt="Auravia Collective" />
           <div class="brand-text">
-            <span class="brand-name">Chronos</span>
+            <span class="brand-name">Auravia Collective</span>
             <span class="brand-tag">Time Tracker</span>
           </div>
         </div>
@@ -29,9 +28,18 @@ import { UserRole } from '../../models/time-tracker.models';
       </div>
 
       <div class="navbar-right">
+        <!-- Running timer: visible on every page; admins can click it to open My Timer -->
+        @if (timerService.status() !== 'completed') {
+          <button type="button" class="live-timer" [class.paused]="timerService.status() === 'paused'" (click)="nav.open('tracker')"
+            [title]="authService.isAdmin() ? 'Open My Timer' : ''">
+            <span class="live-dot"></span>
+            <span class="live-time">{{ timerService.elapsedSeconds() | formatDuration }}</span>
+            <span class="live-client">{{ timerService.activeEntry()?.clientName }}</span>
+          </button>
+        }
         <!-- Locked Active User Profile Strip -->
         <div class="user-locked-badge">
-          <div class="user-avatar" [style.background]="authService.currentUser()?.avatarColor || '#3b82f6'">
+          <div class="user-avatar" [style.background]="authService.currentUser()?.avatarColor || '#a87c2c'">
             {{ getInitials(authService.currentUser()?.name) }}
           </div>
           <div class="user-details">
@@ -40,7 +48,7 @@ import { UserRole } from '../../models/time-tracker.models';
               @if (authService.isAdmin()) {
                 <span class="admin-label">Administrator</span>
               } @else {
-                <span class="rate-label">\${{ authService.currentUser()?.hourlyRate || 0 }}/hr</span>
+                <span class="rate-label">{{ authService.currentUser()?.department || 'Team member' }}</span>
               }
             </span>
           </div>
@@ -115,17 +123,25 @@ import { UserRole } from '../../models/time-tracker.models';
 
     <!-- Change PIN Modal -->
     @if (showPinModal()) {
-      <div class="modal-overlay" (click)="closePinModal()">
+      <div class="modal-overlay" (click)="!authService.mustChangePin() && closePinModal()">
         <div class="modal-card" (click)="$event.stopPropagation()">
           <div class="modal-header">
             <div class="modal-title-group">
-              <span class="modal-icon">🔐</span>
-              <h3>Change Your PIN</h3>
+              <span class="modal-icon"><app-icon name="lock" [size]="18" /></span>
+              <h3>{{ authService.mustChangePin() ? 'Welcome! Choose your own PIN' : 'Change Your PIN' }}</h3>
             </div>
-            <button type="button" class="modal-close" (click)="closePinModal()">✕</button>
+            @if (!authService.mustChangePin()) {
+              <button type="button" class="modal-close" (click)="closePinModal()"><app-icon name="x" [size]="18" /></button>
+            }
           </div>
 
           <form (submit)="onSavePin($event)" class="modal-body">
+            @if (authService.mustChangePin()) {
+              <p class="modal-desc">
+                You signed in with your starting PIN. To keep your account safe, please pick your own PIN now.
+                <br /><strong>Current PIN:</strong> your starting PIN · <strong>New PIN:</strong> anything else only you know (at least 4 characters).
+              </p>
+            }
             <p class="modal-desc">
               Change the PIN used for signing in as <strong>{{ authService.currentUser()?.name }}</strong> ({{ authService.isAdmin() ? 'Administrator' : 'Normal User' }}).
             </p>
@@ -140,21 +156,21 @@ import { UserRole } from '../../models/time-tracker.models';
                   [(ngModel)]="currentPin"
                   name="currentPin"
                   autocomplete="current-password"
-                  maxlength="10"
+                  maxlength="20"
                 />
               </div>
             }
 
             <div class="form-group">
-              <label class="form-label">New PIN (4-10 digits)</label>
+              <label class="form-label">New PIN (at least 4 characters)</label>
               <input
                 type="password"
                 class="form-input"
-                placeholder="Enter new PIN"
+                [placeholder]="authService.mustChangePin() ? 'Not your starting PIN' : 'Enter new PIN'"
                 [(ngModel)]="newPin"
                 name="newPin"
                 autocomplete="new-password"
-                maxlength="10"
+                maxlength="20"
               />
             </div>
 
@@ -167,24 +183,26 @@ import { UserRole } from '../../models/time-tracker.models';
                 [(ngModel)]="confirmPin"
                 name="confirmPin"
                 autocomplete="new-password"
-                maxlength="10"
+                maxlength="20"
               />
             </div>
 
             @if (pinError()) {
               <div class="pin-alert error">
-                ⚠️ {{ pinError() }}
+                {{ pinError() }}
               </div>
             }
 
             @if (pinSuccess()) {
               <div class="pin-alert success">
-                ✓ {{ pinSuccess() }}
+                {{ pinSuccess() }}
               </div>
             }
 
             <div class="modal-actions">
-              <button type="button" class="btn-cancel" (click)="closePinModal()">Cancel</button>
+              @if (!authService.mustChangePin()) {
+                <button type="button" class="btn-cancel" (click)="closePinModal()">Cancel</button>
+              }
               <button type="submit" class="btn-save-pin" [disabled]="savingPin()">
                 {{ savingPin() ? 'Updating...' : 'Update PIN' }}
               </button>
@@ -197,7 +215,7 @@ import { UserRole } from '../../models/time-tracker.models';
     @if (syncNotification()) {
       <div class="sync-toast" [class.success]="syncNotification()?.success" [class.error]="!syncNotification()?.success">
         <span>{{ syncNotification()?.message }}</span>
-        <button class="toast-close" (click)="syncNotification.set(null)">✕</button>
+        <button class="toast-close" (click)="syncNotification.set(null)"><app-icon name="x" [size]="16" /></button>
       </div>
     }
   `,
@@ -207,9 +225,9 @@ import { UserRole } from '../../models/time-tracker.models';
       justify-content: space-between;
       align-items: center;
       padding: 0.75rem 1.5rem;
-      background: #0f172a;
-      border-bottom: 1px solid #1e293b;
-      color: #f8fafc;
+      background: var(--av-surface-2);
+      border-bottom: 1px solid var(--av-divider);
+      color: var(--av-text);
       gap: 1rem;
       flex-wrap: wrap;
     }
@@ -224,17 +242,13 @@ import { UserRole } from '../../models/time-tracker.models';
       gap: 0.65rem;
     }
     .brand-logo {
-      width: 38px;
-      height: 38px;
-      border-radius: 10px;
-      background: linear-gradient(135deg, #059669, #10b981);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+      width: 42px;
+      height: 42px;
+      object-fit: contain;
+      display: block;
     }
     .brand-name {
+      font-family: var(--av-font-heading);
       font-weight: 700;
       font-size: 1.15rem;
       letter-spacing: -0.02em;
@@ -243,8 +257,8 @@ import { UserRole } from '../../models/time-tracker.models';
       font-size: 0.68rem;
       text-transform: uppercase;
       letter-spacing: 0.06em;
-      background: #1e293b;
-      color: #34d399;
+      background: rgba(168, 124, 44, 0.12);
+      color: var(--av-gold-text);
       padding: 2px 6px;
       border-radius: 4px;
       margin-left: 6px;
@@ -260,10 +274,10 @@ import { UserRole } from '../../models/time-tracker.models';
       display: flex;
       align-items: center;
       gap: 10px;
-      background: #1e293b;
+      background: var(--av-surface);
       padding: 4px 12px 4px 6px;
       border-radius: 10px;
-      border: 1px solid #334155;
+      border: 1px solid var(--av-border);
     }
     .user-avatar {
       width: 32px;
@@ -284,18 +298,18 @@ import { UserRole } from '../../models/time-tracker.models';
       font-size: 0.85rem;
       font-weight: 600;
       line-height: 1.1;
-      color: #f8fafc;
+      color: var(--av-text);
     }
     .user-display-sub {
       font-size: 0.72rem;
-      color: #94a3b8;
+      color: var(--av-text-muted);
     }
     .admin-label {
-      color: #a78bfa;
+      color: var(--av-gold);
       font-weight: 600;
     }
     .rate-label {
-      color: #34d399;
+      color: var(--av-green-text);
       font-weight: 600;
     }
     .status-pill {
@@ -309,12 +323,12 @@ import { UserRole } from '../../models/time-tracker.models';
     }
     .status-pill.online {
       background: rgba(16, 185, 129, 0.15);
-      color: #34d399;
+      color: var(--av-green-text);
       border: 1px solid rgba(16, 185, 129, 0.3);
     }
     .status-pill.offline {
       background: rgba(239, 68, 68, 0.15);
-      color: #f87171;
+      color: var(--av-red-text);
       border: 1px solid rgba(239, 68, 68, 0.3);
     }
     .status-pill .dot {
@@ -323,8 +337,8 @@ import { UserRole } from '../../models/time-tracker.models';
       border-radius: 50%;
     }
     .status-pill.online .dot {
-      background: #10b981;
-      box-shadow: 0 0 8px #10b981;
+      background: var(--av-green);
+      box-shadow: 0 0 8px var(--av-green);
     }
     .status-pill.offline .dot {
       background: #ef4444;
@@ -338,7 +352,7 @@ import { UserRole } from '../../models/time-tracker.models';
     .pending-badge {
       font-size: 0.75rem;
       background: #f59e0b;
-      color: #0f172a;
+      color: var(--av-forest);
       padding: 3px 8px;
       border-radius: 6px;
       font-weight: 600;
@@ -348,7 +362,7 @@ import { UserRole } from '../../models/time-tracker.models';
       align-items: center;
       gap: 6px;
       padding: 6px 14px;
-      background: #059669;
+      background: var(--av-green-hover);
       color: white;
       border: none;
       border-radius: 8px;
@@ -358,7 +372,7 @@ import { UserRole } from '../../models/time-tracker.models';
       transition: background 0.15s ease;
     }
     .sync-btn:hover:not(:disabled) {
-      background: #047857;
+      background: var(--av-green-deep);
     }
     .sync-btn:disabled {
       opacity: 0.6;
@@ -375,9 +389,9 @@ import { UserRole } from '../../models/time-tracker.models';
       align-items: center;
       gap: 6px;
       padding: 6px 12px;
-      background: #0f172a;
-      border: 1px solid #334155;
-      color: #94a3b8;
+      background: var(--av-surface-2);
+      border: 1px solid var(--av-border);
+      color: var(--av-text-muted);
       border-radius: 8px;
       font-size: 0.82rem;
       font-weight: 500;
@@ -385,7 +399,7 @@ import { UserRole } from '../../models/time-tracker.models';
       transition: all 0.15s ease;
     }
     .btn-logout:hover {
-      color: #f87171;
+      color: var(--av-red-text);
       border-color: #ef4444;
       background: rgba(239, 68, 68, 0.1);
     }
@@ -397,7 +411,7 @@ import { UserRole } from '../../models/time-tracker.models';
       border-radius: 8px;
       color: white;
       font-size: 0.88rem;
-      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+      box-shadow: 0 8px 24px rgba(6, 60, 53, 0.14);
       z-index: 1000;
       display: flex;
       align-items: center;
@@ -406,8 +420,8 @@ import { UserRole } from '../../models/time-tracker.models';
       animation: slideIn 0.2s ease-out;
     }
     .sync-toast.success {
-      background: #065f46;
-      border: 1px solid #10b981;
+      background: var(--av-green-deep);
+      border: 1px solid var(--av-green);
     }
     .sync-toast.error {
       background: #7f1d1d;
@@ -429,9 +443,9 @@ import { UserRole } from '../../models/time-tracker.models';
       align-items: center;
       gap: 6px;
       padding: 6px 12px;
-      background: #1e293b;
-      border: 1px solid #334155;
-      color: #93c5fd;
+      background: var(--av-surface);
+      border: 1px solid var(--av-border);
+      color: var(--av-gold-soft);
       border-radius: 8px;
       font-size: 0.82rem;
       font-weight: 500;
@@ -439,14 +453,14 @@ import { UserRole } from '../../models/time-tracker.models';
       transition: all 0.15s ease;
     }
     .btn-pin:hover {
-      background: rgba(59, 130, 246, 0.15);
-      border-color: #3b82f6;
-      color: #bfdbfe;
+      background: rgba(168, 124, 44, 0.15);
+      border-color: var(--av-gold);
+      color: var(--av-gold-soft);
     }
     .modal-overlay {
       position: fixed;
       inset: 0;
-      background: rgba(15, 23, 42, 0.75);
+      background: rgba(6, 60, 53, 0.75);
       backdrop-filter: blur(4px);
       display: flex;
       align-items: center;
@@ -455,14 +469,14 @@ import { UserRole } from '../../models/time-tracker.models';
       padding: 1rem;
     }
     .modal-card {
-      background: #1e293b;
-      border: 1px solid #334155;
+      background: var(--av-surface);
+      border: 1px solid var(--av-border);
       border-radius: 16px;
       padding: 1.75rem;
       width: 100%;
       max-width: 420px;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-      color: #f8fafc;
+      box-shadow: 0 25px 50px -12px rgba(6, 60, 53, 0.18);
+      color: var(--av-text);
       animation: modalPop 0.15s ease-out;
     }
     @keyframes modalPop {
@@ -474,7 +488,7 @@ import { UserRole } from '../../models/time-tracker.models';
       justify-content: space-between;
       align-items: center;
       margin-bottom: 1rem;
-      border-bottom: 1px solid #334155;
+      border-bottom: 1px solid var(--av-border);
       padding-bottom: 0.75rem;
     }
     .modal-title-group {
@@ -490,18 +504,18 @@ import { UserRole } from '../../models/time-tracker.models';
     .modal-close {
       background: none;
       border: none;
-      color: #94a3b8;
+      color: var(--av-text-muted);
       font-size: 1.25rem;
       cursor: pointer;
       padding: 4px;
       line-height: 1;
     }
     .modal-close:hover {
-      color: #f8fafc;
+      color: var(--av-text);
     }
     .modal-desc {
       font-size: 0.85rem;
-      color: #94a3b8;
+      color: var(--av-text-muted);
       margin-bottom: 1.25rem;
       line-height: 1.4;
     }
@@ -518,19 +532,19 @@ import { UserRole } from '../../models/time-tracker.models';
     .form-label {
       font-size: 0.8rem;
       font-weight: 600;
-      color: #cbd5e1;
+      color: var(--av-text-body);
     }
     .form-input {
-      background: #0f172a;
-      border: 1px solid #334155;
+      background: var(--av-surface-2);
+      border: 1px solid var(--av-border);
       border-radius: 8px;
       padding: 10px 12px;
-      color: #f8fafc;
+      color: var(--av-text);
       font-size: 0.9rem;
       outline: none;
     }
     .form-input:focus {
-      border-color: #3b82f6;
+      border-color: var(--av-gold);
     }
     .pin-alert {
       padding: 8px 12px;
@@ -541,12 +555,12 @@ import { UserRole } from '../../models/time-tracker.models';
     .pin-alert.error {
       background: rgba(239, 68, 68, 0.15);
       border: 1px solid rgba(239, 68, 68, 0.3);
-      color: #f87171;
+      color: var(--av-red-text);
     }
     .pin-alert.success {
       background: rgba(16, 185, 129, 0.15);
       border: 1px solid rgba(16, 185, 129, 0.3);
-      color: #34d399;
+      color: var(--av-green-text);
     }
     .modal-actions {
       display: flex;
@@ -556,19 +570,19 @@ import { UserRole } from '../../models/time-tracker.models';
     }
     .btn-cancel {
       background: transparent;
-      border: 1px solid #334155;
-      color: #94a3b8;
+      border: 1px solid var(--av-border);
+      color: var(--av-text-muted);
       padding: 8px 14px;
       border-radius: 8px;
       font-size: 0.85rem;
       cursor: pointer;
     }
     .btn-cancel:hover {
-      background: #334155;
-      color: #f8fafc;
+      background: var(--av-border);
+      color: var(--av-text);
     }
     .btn-save-pin {
-      background: linear-gradient(135deg, #3b82f6, #2563eb);
+      background: linear-gradient(135deg, var(--av-gold), var(--av-forest));
       color: white;
       border: none;
       padding: 8px 16px;
@@ -576,15 +590,65 @@ import { UserRole } from '../../models/time-tracker.models';
       font-size: 0.85rem;
       font-weight: 600;
       cursor: pointer;
-      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+      box-shadow: 0 4px 12px rgba(6, 60, 53, 0.3);
     }
     .btn-save-pin:hover:not(:disabled) {
-      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      background: linear-gradient(135deg, var(--av-forest), var(--av-forest-hover));
     }
     .btn-save-pin:disabled {
       opacity: 0.6;
       cursor: not-allowed;
     }
+    /* ── Premium layer ─────────────────────────────────────────────── */
+    .navbar-container {
+      background: rgba(254, 250, 241, 0.92);
+      backdrop-filter: blur(10px);
+      border-bottom: 1px solid var(--av-border);
+      box-shadow: 0 1px 0 rgba(168, 124, 44, 0.18);
+      padding: 0.7rem 2rem;
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+    .brand-name {
+      font-family: var(--av-font-heading);
+      font-size: 0.95rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--av-forest);
+    }
+    .brand-tag {
+      background: none;
+      border-left: 1px solid var(--av-gold-soft);
+      border-radius: 0;
+      padding: 0 0 0 10px;
+      margin-left: 10px;
+      letter-spacing: 0.16em;
+      font-size: 0.62rem;
+      color: var(--av-gold-text);
+    }
+    .user-avatar { border-radius: 50%; }
+    .live-timer {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid rgba(46, 125, 91, 0.35);
+      background: rgba(46, 125, 91, 0.08);
+      color: var(--av-forest);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font: inherit;
+      font-size: 0.82rem;
+      cursor: pointer;
+    }
+    .live-timer.paused { border-color: rgba(245, 158, 11, 0.4); background: rgba(245, 158, 11, 0.08); }
+    .live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--av-green); animation: livePulse 1.6s ease-in-out infinite; }
+    .live-timer.paused .live-dot { background: #d97706; animation: none; }
+    .live-time { font-weight: 700; font-variant-numeric: tabular-nums; }
+    .live-client { color: var(--av-text-muted); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    @keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+    .sync-btn, .btn-pin, .btn-logout { border-radius: 999px; }
   `],
 })
 export class NavbarComponent {
@@ -605,8 +669,16 @@ export class NavbarComponent {
 
   constructor(
     public authService: AuthService,
-    public supabaseSync: SupabaseSyncService
+    public supabaseSync: SupabaseSyncService,
+    public timerService: TimerService,
+    public nav: NavService
   ) {
+    // First sign-in with the starting PIN: open "choose your own PIN" and don't let it be skipped
+    effect(() => {
+      if (this.authService.mustChangePin() && !this.showPinModal()) {
+        untracked(() => this.openChangePinModal());
+      }
+    });
     if (this.authService.isAdmin()) {
       this.activeRole.set('admin');
     } else {
@@ -673,7 +745,9 @@ export class NavbarComponent {
   getInitials(name?: string): string {
     if (!name) return 'U';
     return name
+      .replace(/\([^)]*\)/g, '')
       .split(' ')
+      .filter(Boolean)
       .map((n) => n[0])
       .slice(0, 2)
       .join('')

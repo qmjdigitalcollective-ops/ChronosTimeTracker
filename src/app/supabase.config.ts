@@ -1,7 +1,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// ⚡ SUPABASE CONFIGURATION
+// SUPABASE CONFIGURATION
 // Replace SUPABASE_URL and SUPABASE_ANON_KEY with your project credentials from
 // your Supabase Dashboard: Settings -> API
 // ─────────────────────────────────────────────────────────────────────────────

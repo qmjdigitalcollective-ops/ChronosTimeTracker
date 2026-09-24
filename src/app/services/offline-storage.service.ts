@@ -7,6 +7,10 @@ import {
   ScreenshotRecord,
   AppSettings,
   UserRole,
+  Contract,
+  Payout,
+  TimesheetApproval,
+  TeamPermissionRow,
 } from '../models/time-tracker.models';
 
 // ── Default seed data ────────────────────────────────────────────────────────
@@ -14,13 +18,13 @@ import {
 const DEFAULT_EMPLOYEES: Employee[] = [
   {
     id: 'emp-1',
-    name: 'Sarah Connor (Admin)',
-    email: 'sarah.connor@example.com',
+    name: 'Queen (Owner)',
+    email: 'qmjdigitalcollective@gmail.com',
     role: 'admin',
-    hourlyRate: 55.0,
-    department: 'Management & Ops',
-    avatarColor: '#6366f1',
-    pin: '1234',
+    hourlyRate: 0,
+    department: 'Owner',
+    avatarColor: '#063c35',
+    pin: 'queen23', // starting PIN: first name + 23 (must be changed on first sign-in)
     active: true,
   },
   {
@@ -129,7 +133,26 @@ const STORAGE_KEYS = {
   TIME_ENTRIES: 'tt_supabase_time_entries',
   SCREENSHOTS: 'tt_supabase_screenshots',
   SETTINGS: 'tt_supabase_settings',
+  CONTRACTS: 'tt_supabase_contracts',
+  PAYOUTS: 'tt_supabase_payouts',
+  APPROVALS: 'tt_supabase_timesheet_approvals',
+  PERMISSIONS: 'tt_supabase_team_permissions',
 };
+
+function toContract(row: Record<string, any>): Contract {
+  return {
+    id: String(row['id'] || ''),
+    employeeId: String(row['employeeId'] ?? row['employee_id'] ?? ''),
+    clientId: String(row['clientId'] ?? row['client_id'] ?? ''),
+    payRate: Number(row['payRate'] ?? row['pay_rate'] ?? 0),
+    billRate: Number(row['billRate'] ?? row['bill_rate'] ?? 0),
+    weeklyLimitHours:
+      row['weeklyLimitHours'] ?? row['weekly_limit_hours'] ?? null
+        ? Number(row['weeklyLimitHours'] ?? row['weekly_limit_hours'])
+        : undefined,
+    active: row['active'] !== false && row['active'] !== 'false',
+  };
+}
 
 // ── Flexible Normalizer Helpers ─────────────────────────────────────────────
 
@@ -306,7 +329,8 @@ export class OfflineStorageService {
         .select('*');
 
       if (teErr || !tes || tes.length === 0) {
-        const localTes = this.getLocal(STORAGE_KEYS.TIME_ENTRIES, DEFAULT_TIME_ENTRIES);
+        // Never push demo time entries into a real database
+        const localTes = this.getLocal<TimeEntry[]>(STORAGE_KEYS.TIME_ENTRIES, []);
         this.setLocal(STORAGE_KEYS.TIME_ENTRIES, localTes);
         try {
           await this.supabase.from('time_entries').upsert(localTes);
@@ -449,14 +473,20 @@ export class OfflineStorageService {
       if (error) {
         console.warn('[Supabase DB Error - time_entries]:', error.message);
       } else if (data && data.length > 0) {
-        const list = data.map(toTimeEntry).sort((a, b) => b.startTime - a.startTime);
+        const cloud = data.map(toTimeEntry);
+        // Keep time saved on this device that hasn't been uploaded yet
+        const cloudIds = new Set(cloud.map((e) => e.id));
+        const unsynced = this.getLocal<TimeEntry[]>(STORAGE_KEYS.TIME_ENTRIES, []).filter(
+          (e) => e.syncStatus !== 'synced' && !cloudIds.has(e.id)
+        );
+        const list = [...cloud, ...unsynced].sort((a, b) => b.startTime - a.startTime);
         this.setLocal(STORAGE_KEYS.TIME_ENTRIES, list);
         return list;
       }
     } catch (e) {
       console.warn('[SupabaseStorage] Using local time entries fallback:', e);
     }
-    return this.getLocal<TimeEntry[]>(STORAGE_KEYS.TIME_ENTRIES, DEFAULT_TIME_ENTRIES);
+    return this.getLocal<TimeEntry[]>(STORAGE_KEYS.TIME_ENTRIES, []);
   }
 
   async getActiveTimeEntry(employeeId?: string): Promise<TimeEntry | null> {
@@ -535,6 +565,204 @@ export class OfflineStorageService {
       await this.supabase.from('time_entries').delete().eq('id', id);
     } catch (err) {
       console.warn('[SupabaseStorage] Delete time entry error:', err);
+    }
+  }
+
+  // ── Contracts (pay & bill rate per member per client) ─────────────────────
+  // Needs the "contracts" table in Supabase (supabase_migration_002_contracts.sql).
+  // Until that table exists, contracts are kept in this browser only.
+
+  async getContracts(): Promise<Contract[]> {
+    await this.waitForSeed();
+    try {
+      const { data, error } = await this.supabase.from('contracts').select('*');
+      if (error) {
+        console.warn('[Supabase DB Error - contracts]:', error.message, '| Run supabase_migration_002_contracts.sql');
+      } else if (data) {
+        const list = data.map(toContract);
+        this.setLocal(STORAGE_KEYS.CONTRACTS, list);
+        return list;
+      }
+    } catch (e) {
+      console.warn('[SupabaseStorage] Using local contracts fallback:', e);
+    }
+    return this.getLocal<Contract[]>(STORAGE_KEYS.CONTRACTS, []);
+  }
+
+  async saveContract(contract: Contract): Promise<void> {
+    const list = this.getLocal<Contract[]>(STORAGE_KEYS.CONTRACTS, []);
+    const idx = list.findIndex((c) => c.id === contract.id);
+    if (idx >= 0) list[idx] = contract;
+    else list.push(contract);
+    this.setLocal(STORAGE_KEYS.CONTRACTS, list);
+
+    try {
+      const { error } = await this.supabase.from('contracts').upsert(contract);
+      if (error) console.warn('[Supabase] Contract not saved to cloud:', error.message);
+    } catch (err) {
+      console.warn('[SupabaseStorage] Save contract error (cached locally):', err);
+    }
+  }
+
+  async deleteContract(id: string): Promise<void> {
+    const list = this.getLocal<Contract[]>(STORAGE_KEYS.CONTRACTS, []);
+    this.setLocal(STORAGE_KEYS.CONTRACTS, list.filter((c) => c.id !== id));
+    try {
+      await this.supabase.from('contracts').delete().eq('id', id);
+    } catch (err) {
+      console.warn('[SupabaseStorage] Delete contract error:', err);
+    }
+  }
+
+  /** True when the Supabase tables added in migration 002 exist. */
+  async cloudTablesReady(): Promise<boolean> {
+    try {
+      const [c, p, a] = await Promise.all([
+        this.supabase.from('contracts').select('id').limit(1),
+        this.supabase.from('payouts').select('id').limit(1),
+        this.supabase.from('timesheet_approvals').select('id').limit(1),
+      ]);
+      const t = await this.supabase.from('team_permissions').select('id').limit(1);
+      return !c.error && !p.error && !a.error && !t.error;
+    } catch {
+      return false;
+    }
+  }
+
+  // ── Payouts (who was paid for which pay period) ──────────────────────────
+
+  async getPayouts(): Promise<Payout[]> {
+    await this.waitForSeed();
+    try {
+      const { data, error } = await this.supabase.from('payouts').select('*');
+      if (!error && data) {
+        const list = data.map((row: Record<string, any>) => ({
+          id: String(row['id']),
+          employeeId: String(row['employeeId'] ?? row['employee_id'] ?? ''),
+          employeeName: String(row['employeeName'] ?? row['employee_name'] ?? ''),
+          periodStart: Number(row['periodStart'] ?? row['period_start'] ?? 0),
+          periodEnd: Number(row['periodEnd'] ?? row['period_end'] ?? 0),
+          hours: Number(row['hours'] ?? 0),
+          amount: Number(row['amount'] ?? 0),
+          paidAt: Number(row['paidAt'] ?? row['paid_at'] ?? 0),
+          note: row['note'] != null ? String(row['note']) : undefined,
+        }));
+        this.setLocal(STORAGE_KEYS.PAYOUTS, list);
+        return list;
+      }
+    } catch (e) {
+      console.warn('[SupabaseStorage] Using local payouts fallback:', e);
+    }
+    return this.getLocal<Payout[]>(STORAGE_KEYS.PAYOUTS, []);
+  }
+
+  async savePayout(payout: Payout): Promise<void> {
+    const list = this.getLocal<Payout[]>(STORAGE_KEYS.PAYOUTS, []);
+    const idx = list.findIndex((p) => p.id === payout.id);
+    if (idx >= 0) list[idx] = payout;
+    else list.push(payout);
+    this.setLocal(STORAGE_KEYS.PAYOUTS, list);
+    try {
+      const { error } = await this.supabase.from('payouts').upsert(payout);
+      if (error) console.warn('[Supabase] Payout not saved to cloud:', error.message);
+    } catch (err) {
+      console.warn('[SupabaseStorage] Save payout error (cached locally):', err);
+    }
+  }
+
+  async deletePayout(id: string): Promise<void> {
+    const list = this.getLocal<Payout[]>(STORAGE_KEYS.PAYOUTS, []);
+    this.setLocal(STORAGE_KEYS.PAYOUTS, list.filter((p) => p.id !== id));
+    try {
+      await this.supabase.from('payouts').delete().eq('id', id);
+    } catch (err) {
+      console.warn('[SupabaseStorage] Delete payout error:', err);
+    }
+  }
+
+  // ── Timesheet approvals (submit → approve per pay period) ────────────────
+
+  async getApprovals(): Promise<TimesheetApproval[]> {
+    await this.waitForSeed();
+    try {
+      const { data, error } = await this.supabase.from('timesheet_approvals').select('*');
+      if (!error && data) {
+        const list = data.map((row: Record<string, any>) => ({
+          id: String(row['id']),
+          employeeId: String(row['employeeId'] ?? ''),
+          employeeName: String(row['employeeName'] ?? ''),
+          periodStart: Number(row['periodStart'] ?? 0),
+          periodEnd: Number(row['periodEnd'] ?? 0),
+          status: row['status'] as TimesheetApproval['status'],
+          hours: Number(row['hours'] ?? 0),
+          submittedAt: Number(row['submittedAt'] ?? 0),
+          reviewedAt: row['reviewedAt'] != null ? Number(row['reviewedAt']) : undefined,
+          note: row['note'] != null ? String(row['note']) : undefined,
+        }));
+        this.setLocal(STORAGE_KEYS.APPROVALS, list);
+        return list;
+      }
+    } catch (e) {
+      console.warn('[SupabaseStorage] Using local approvals fallback:', e);
+    }
+    return this.getLocal<TimesheetApproval[]>(STORAGE_KEYS.APPROVALS, []);
+  }
+
+  async saveApproval(approval: TimesheetApproval): Promise<void> {
+    const list = this.getLocal<TimesheetApproval[]>(STORAGE_KEYS.APPROVALS, []);
+    const idx = list.findIndex((a) => a.id === approval.id);
+    if (idx >= 0) list[idx] = approval;
+    else list.push(approval);
+    this.setLocal(STORAGE_KEYS.APPROVALS, list);
+    try {
+      const { error } = await this.supabase.from('timesheet_approvals').upsert(approval);
+      if (error) console.warn('[Supabase] Timesheet approval not saved to cloud:', error.message);
+    } catch (err) {
+      console.warn('[SupabaseStorage] Save approval error (cached locally):', err);
+    }
+  }
+
+  // ── Team access (what team members can see and do) ──────────────────────
+
+  async getPermissions(): Promise<TeamPermissionRow[]> {
+    await this.waitForSeed();
+    try {
+      const { data, error } = await this.supabase.from('team_permissions').select('*');
+      if (!error && data) {
+        const list = data.map((row: Record<string, any>) => ({
+          id: String(row['id']),
+          permissions: row['permissions'] ?? {},
+        }));
+        this.setLocal(STORAGE_KEYS.PERMISSIONS, list);
+        return list;
+      }
+    } catch (e) {
+      console.warn('[SupabaseStorage] Using local permissions fallback:', e);
+    }
+    return this.getLocal<TeamPermissionRow[]>(STORAGE_KEYS.PERMISSIONS, []);
+  }
+
+  async savePermission(row: TeamPermissionRow): Promise<void> {
+    const list = this.getLocal<TeamPermissionRow[]>(STORAGE_KEYS.PERMISSIONS, []);
+    const idx = list.findIndex((r) => r.id === row.id);
+    if (idx >= 0) list[idx] = row;
+    else list.push(row);
+    this.setLocal(STORAGE_KEYS.PERMISSIONS, list);
+    try {
+      const { error } = await this.supabase.from('team_permissions').upsert(row);
+      if (error) console.warn('[Supabase] Team access not saved to cloud:', error.message);
+    } catch (err) {
+      console.warn('[SupabaseStorage] Save permission error (cached locally):', err);
+    }
+  }
+
+  async deletePermission(id: string): Promise<void> {
+    const list = this.getLocal<TeamPermissionRow[]>(STORAGE_KEYS.PERMISSIONS, []);
+    this.setLocal(STORAGE_KEYS.PERMISSIONS, list.filter((r) => r.id !== id));
+    try {
+      await this.supabase.from('team_permissions').delete().eq('id', id);
+    } catch (err) {
+      console.warn('[SupabaseStorage] Delete permission error:', err);
     }
   }
 
@@ -642,6 +870,30 @@ export class OfflineStorageService {
     };
   }
 
+  /**
+   * Upload time entries and screenshots that were saved while offline.
+   * Returns the ids that the database accepted (only those should be marked synced).
+   */
+  async uploadPending(
+    entries: TimeEntry[],
+    screenshots: ScreenshotRecord[]
+  ): Promise<{ entryIds: string[]; screenshotIds: string[]; errors: string[] }> {
+    const entryIds: string[] = [];
+    const screenshotIds: string[] = [];
+    const errors: string[] = [];
+    for (const entry of entries) {
+      const { error } = await this.supabase.from('time_entries').upsert({ ...entry, syncStatus: 'synced', syncedAt: Date.now() });
+      if (error) errors.push(error.message);
+      else entryIds.push(entry.id);
+    }
+    for (const shot of screenshots) {
+      const { error } = await this.supabase.from('screenshots').upsert({ ...shot, synced: true, syncedAt: Date.now() });
+      if (error) errors.push(error.message);
+      else screenshotIds.push(shot.id);
+    }
+    return { entryIds, screenshotIds, errors };
+  }
+
   async markEntriesAsSynced(
     entryIds: string[],
     screenshotDriveMap: Record<string, { fileId: string; viewUrl: string }> = {}
@@ -695,12 +947,14 @@ export class OfflineStorageService {
   // ── Export / Import ───────────────────────────────────────────────────────
 
   async exportAllData(): Promise<string> {
-    const [employees, clients, timeEntries, screenshots, settings] = await Promise.all([
+    const [employees, clients, timeEntries, screenshots, settings, contracts, payouts] = await Promise.all([
       this.getEmployees(),
       this.getClients(),
       this.getTimeEntries(),
       this.getScreenshots(),
       this.getSettings(),
+      this.getContracts(),
+      this.getPayouts(),
     ]);
 
     return JSON.stringify(
@@ -709,6 +963,8 @@ export class OfflineStorageService {
         version: 2,
         employees,
         clients,
+        contracts,
+        payouts,
         timeEntries,
         screenshots,
         settings,
@@ -741,6 +997,15 @@ export class OfflineStorageService {
       try {
         await this.supabase.from('clients').upsert(clients);
       } catch {}
+    }
+
+    const contracts = toArray<Contract>(data.contracts);
+    for (const contract of contracts) {
+      await this.saveContract(contract);
+    }
+
+    for (const payout of toArray<Payout>(data.payouts)) {
+      await this.savePayout(payout);
     }
 
     const timeEntries = toArray<TimeEntry>(data.timeEntries || data.time_entries);

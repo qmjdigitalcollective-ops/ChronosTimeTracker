@@ -2,10 +2,10 @@
   min-height: 100vh;
   display: flex;
   flex-direction: column;
-  background-color: #090d16;
-  background-image: 
-    radial-gradient(at 10% 20%, rgba(59, 130, 246, 0.05) 0px, transparent 50%),
-    radial-gradient(at 90% 80%, rgba(99, 102, 241, 0.05) 0px, transparent 50%);
+  background-color: var(--av-bg);
+  background-image:
+    radial-gradient(1200px 600px at 0% 0%, rgba(168, 124, 44, 0.07), transparent 60%),
+    radial-gradient(1000px 600px at 100% 100%, rgba(6, 60, 53, 0.05), transparent 60%);
 }
 
 .main-content {
@@ -14,10 +14,10 @@
 }
 
 .app-footer {
-  border-top: 1px solid #1e293b;
-  background: #0b0f19;
+  border-top: 1px solid var(--av-divider);
+  background: var(--av-bg-deep);
   padding: 1rem 1.5rem;
-  color: #64748b;
+  color: var(--av-text-faint);
   font-size: 0.78rem;
 }
 
@@ -41,9 +41,9 @@
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #10b981;
+  background: var(--av-green);
 }
 
 .footer-right {
-  color: #475569;
+  color: var(--av-border-strong);
 }

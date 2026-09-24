@@ -5,17 +5,19 @@
     <app-navbar (roleChange)="onRoleChange($event)"></app-navbar>
 
     <main class="main-content">
+      <!-- Admins get the side menu (My Timer is one of its pages); team members get their timer -->
       @if (authService.isAdmin()) {
         <app-admin-dashboard></app-admin-dashboard>
+      } @else {
+        <app-user-tracker></app-user-tracker>
       }
-      <app-user-tracker></app-user-tracker>
     </main>
 
     <footer class="app-footer">
       <div class="footer-inner">
         <div class="footer-left">
           <span class="footer-dot"></span>
-          <span>Offline-First Engine: Local IndexedDB • Synchronizes to Firebase Cloud</span>
+          <span>Auravia Collective • Works offline, syncs to the cloud when online</span>
         </div>
         <div class="footer-right">
           <span>Logged in as {{ authService.currentUser()?.name }} ({{ authService.isAdmin() ? 'Admin' : 'Normal User' }})</span>

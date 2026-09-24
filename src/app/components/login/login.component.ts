@@ -12,25 +12,20 @@ import { AuthService } from '../../services/auth.service';
       <div class="login-card">
         <!-- Logo & Branding -->
         <div class="login-header">
-          <div class="brand-logo">
-            <svg viewBox="0 0 24 24" width="28" height="28" stroke="currentColor" stroke-width="2.2" fill="none">
-              <circle cx="12" cy="12" r="10"></circle>
-              <polyline points="12 6 12 12 16 14"></polyline>
-            </svg>
-          </div>
-          <h2 class="brand-title">Chronos Time Tracker</h2>
-          <p class="brand-desc">Offline Time Tracking &amp; Automated Cloud Sync</p>
+          <img class="brand-logo" src="auravia-mark.png" alt="Auravia Collective" />
+          <h2 class="brand-title">Auravia Collective</h2>
+          <p class="brand-desc">Team Time Tracker</p>
         </div>
 
         <!-- Login Form -->
         <form class="login-form" (submit)="onSubmit($event)">
           <div class="form-group">
-            <label class="form-label" for="username-input">Employee ID</label>
+            <label class="form-label" for="username-input">Email or Employee ID</label>
             <input
               id="username-input"
               type="text"
               class="form-input"
-              placeholder="e.g. emp-1"
+              placeholder="you@email.com or emp-1"
               [(ngModel)]="username"
               name="username"
               autocomplete="username"
@@ -48,25 +43,25 @@ import { AuthService } from '../../services/auth.service';
               [(ngModel)]="pin"
               name="pin"
               autocomplete="current-password"
-              maxlength="10"
+              maxlength="20"
             />
           </div>
 
           @if (errorMessage()) {
             <div class="error-banner">
-              ⚠️ {{ errorMessage() }}
+              {{ errorMessage() }}
             </div>
           }
 
           <button type="submit" class="btn-submit" [disabled]="loading()">
-            {{ loading() ? 'Signing In...' : 'Clock In / Start Tracking' }}
+            {{ loading() ? 'Signing in…' : 'Sign In' }}
           </button>
         </form>
 
         <div class="login-footer">
           <span class="offline-badge">
             <span class="dot"></span>
-            Offline-Enabled • Ready without Internet
+            Works offline · syncs when you're back online
           </span>
         </div>
       </div>
@@ -81,30 +76,25 @@ import { AuthService } from '../../services/auth.service';
       padding: 1.5rem;
     }
     .login-card {
-      background: #1e293b;
-      border: 1px solid #334155;
+      background: var(--av-surface);
+      border: 1px solid var(--av-border);
       border-radius: 20px;
       padding: 2.25rem;
       width: 100%;
       max-width: 460px;
-      box-shadow: 0 20px 40px -15px rgba(0, 0, 0, 0.5);
-      color: #f8fafc;
+      box-shadow: 0 20px 40px -15px rgba(6, 60, 53, 0.18);
+      color: var(--av-text);
     }
     .login-header {
       text-align: center;
       margin-bottom: 1.75rem;
     }
     .brand-logo {
-      width: 52px;
-      height: 52px;
-      border-radius: 14px;
-      background: linear-gradient(135deg, #3b82f6, #6366f1);
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      margin-bottom: 0.85rem;
-      box-shadow: 0 8px 16px rgba(59, 130, 246, 0.35);
+      width: 84px;
+      height: 84px;
+      object-fit: contain;
+      display: inline-block;
+      margin-bottom: 0.5rem;
     }
     .brand-title {
       font-size: 1.45rem;
@@ -114,7 +104,7 @@ import { AuthService } from '../../services/auth.service';
     }
     .brand-desc {
       font-size: 0.82rem;
-      color: #94a3b8;
+      color: var(--av-text-muted);
       margin: 4px 0 0 0;
     }
     .login-form {
@@ -130,14 +120,14 @@ import { AuthService } from '../../services/auth.service';
     .form-label {
       font-size: 0.82rem;
       font-weight: 600;
-      color: #cbd5e1;
+      color: var(--av-text-body);
     }
     .form-input {
-      background: #0f172a;
-      border: 1px solid #334155;
+      background: var(--av-surface-2);
+      border: 1px solid var(--av-border);
       border-radius: 10px;
       padding: 11px 14px;
-      color: #f8fafc;
+      color: var(--av-text);
       font-size: 0.95rem;
       outline: none;
       transition: border-color 0.15s ease;
@@ -145,19 +135,19 @@ import { AuthService } from '../../services/auth.service';
       box-sizing: border-box;
     }
     .form-input:focus {
-      border-color: #3b82f6;
+      border-color: var(--av-gold);
     }
     .error-banner {
       background: rgba(239, 68, 68, 0.15);
       border: 1px solid rgba(239, 68, 68, 0.3);
-      color: #f87171;
+      color: var(--av-red-text);
       padding: 10px 14px;
       border-radius: 8px;
       font-size: 0.82rem;
       font-weight: 500;
     }
     .btn-submit {
-      background: linear-gradient(135deg, #2563eb, #1d4ed8);
+      background: linear-gradient(135deg, var(--av-forest), var(--av-forest-hover));
       color: white;
       border: none;
       padding: 12px;
@@ -166,11 +156,11 @@ import { AuthService } from '../../services/auth.service';
       font-weight: 600;
       cursor: pointer;
       transition: all 0.15s ease;
-      box-shadow: 0 4px 12px rgba(37, 99, 235, 0.3);
+      box-shadow: 0 4px 12px rgba(6, 60, 53, 0.3);
       margin-top: 0.5rem;
     }
     .btn-submit:hover:not(:disabled) {
-      background: linear-gradient(135deg, #1d4ed8, #1e40af);
+      background: linear-gradient(135deg, var(--av-forest-hover), var(--av-forest-deep));
       transform: translateY(-1px);
     }
     .btn-submit:disabled {
@@ -180,7 +170,7 @@ import { AuthService } from '../../services/auth.service';
     .login-footer {
       margin-top: 1.75rem;
       text-align: center;
-      border-top: 1px solid #334155;
+      border-top: 1px solid var(--av-border);
       padding-top: 1.25rem;
     }
     .offline-badge {
@@ -188,13 +178,62 @@ import { AuthService } from '../../services/auth.service';
       align-items: center;
       gap: 6px;
       font-size: 0.75rem;
-      color: #94a3b8;
+      color: var(--av-text-muted);
     }
     .offline-badge .dot {
       width: 6px;
       height: 6px;
       border-radius: 50%;
-      background: #10b981;
+      background: var(--av-green);
+    }
+    /* ── Premium layer ─────────────────────────────────────────────── */
+    .login-container {
+      background:
+        radial-gradient(900px 500px at 15% 10%, rgba(168, 124, 44, 0.10), transparent 60%),
+        radial-gradient(700px 500px at 90% 90%, rgba(6, 60, 53, 0.08), transparent 60%);
+    }
+    .login-card {
+      border-radius: 24px;
+      border: 1px solid var(--av-border);
+      padding: 2.75rem 2.5rem;
+      position: relative;
+      overflow: hidden;
+      box-shadow: 0 30px 60px -30px rgba(6, 60, 53, 0.35);
+    }
+    .login-card::before {
+      content: '';
+      position: absolute;
+      inset: 0 0 auto 0;
+      height: 3px;
+      background: linear-gradient(90deg, var(--av-forest), var(--av-gold), var(--av-forest));
+    }
+    .brand-title {
+      font-family: var(--av-font-heading);
+      font-size: 1.05rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.24em;
+      color: var(--av-forest);
+    }
+    .brand-desc {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--av-gold-text);
+      margin-top: 8px;
+    }
+    .form-label {
+      font-size: 0.68rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--av-text-muted);
+    }
+    .form-input { border-radius: 12px; background: var(--av-surface); }
+    .form-input:focus { border-color: var(--av-gold); box-shadow: 0 0 0 3px rgba(168, 124, 44, 0.15); }
+    .btn-submit {
+      border-radius: 999px;
+      background: var(--av-forest);
+      letter-spacing: 0.04em;
     }
   `],
 })

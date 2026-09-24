@@ -143,7 +143,7 @@ CREATE POLICY "Public Full Access App Settings" ON public.app_settings FOR ALL U
 -- Seed Initial Default Employees if empty
 INSERT INTO public.employees (id, name, email, role, "hourlyRate", pin, department, "avatarColor", active)
 VALUES 
-  ('emp-1', 'Sarah Connor (Admin)', 'sarah.connor@example.com', 'admin', 55.0, '1234', 'Management & Ops', '#6366f1', true),
+  ('emp-1', 'Queen (Owner)', 'qmjdigitalcollective@gmail.com', 'admin', 0, 'queen23', 'Owner', '#063c35', true),
   ('emp-2', 'John Doe (Developer)', 'john.doe@example.com', 'user', 35.0, '1234', 'Engineering', '#0ea5e9', true),
   ('emp-3', 'Jane Smith (UI Designer)', 'jane.smith@example.com', 'user', 40.0, '1234', 'Product Design', '#ec4899', true),
   ('emp-4', 'Alex Rivera (QA Tester)', 'alex.rivera@example.com', 'user', 30.0, '1234', 'Quality Assurance', '#10b981', true)

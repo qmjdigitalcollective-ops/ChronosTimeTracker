@@ -10,8 +10,8 @@ function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 600,
-    title: 'TimeTracker Pro',
-    backgroundColor: '#090d16',
+    title: 'Auravia Collective Time Tracker',
+    backgroundColor: '#fefaf1',
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),

@@ -80,10 +80,11 @@ class MockOfflineStorageService extends OfflineStorageService {
 
 describe('AuthService', () => {
   let authService: AuthService;
+  let mockStorage: MockOfflineStorageService;
 
   beforeEach(async () => {
     localStorage.clear();
-    const mockStorage = new MockOfflineStorageService();
+    mockStorage = new MockOfflineStorageService();
     authService = new AuthService(mockStorage);
     await authService.restoreSession();
   });
@@ -138,7 +139,48 @@ describe('AuthService', () => {
     await authService.loginUser('emp-2', '1234');
     const res = await authService.changeCurrentUserPin('12', '1234');
     expect(res.success).toBe(false);
-    expect(res.message).toContain('at least 4 digits');
+    expect(res.message).toContain('at least 4 characters');
+  });
+
+  it('should require a new PIN after signing in with the starting PIN (first name + 23)', async () => {
+    const john = (await mockStorage.getEmployeeById('emp-2'))!;
+    const original = john.pin;
+    john.pin = 'john23';
+    const login = await authService.loginUser('emp-2', 'John23');
+    expect(login.success).toBe(true);
+    expect(authService.mustChangePin()).toBe(true);
+
+    const sameAgain = await authService.changeCurrentUserPin('john23', 'john23');
+    expect(sameAgain.success).toBe(false);
+
+    const res = await authService.changeCurrentUserPin('blue7788', 'john23');
+    expect(res.success).toBe(true);
+    expect(authService.mustChangePin()).toBe(false);
+    john.pin = original;
+  });
+
+  it('does not re-ask for a new PIN if the cloud never saved it (known sync issue)', async () => {
+    // Person signs in with the starter PIN and picks their own — same as above.
+    const john = (await mockStorage.getEmployeeById('emp-2'))!;
+    const original = john.pin;
+    john.pin = 'john23';
+    await authService.loginUser('emp-2', 'John23');
+    await authService.changeCurrentUserPin('blue7788', 'john23');
+    expect(authService.mustChangePin()).toBe(false);
+
+    // Simulate the cloud write silently failing: the stored record still has the
+    // OLD starting PIN, as if the upsert to Supabase never went through.
+    john.pin = 'john23';
+
+    // A brand new AuthService (e.g. reopening the app tomorrow) reads that stale
+    // record back from storage.
+    const secondSession = new AuthService(mockStorage);
+    const login = await secondSession.loginUser('emp-2', 'john23');
+    expect(login.success).toBe(true);
+    // Bug (before the fix): this would be true again, endlessly re-prompting.
+    expect(secondSession.mustChangePin()).toBe(false);
+
+    john.pin = original;
   });
 
   it('should allow admin user to change their PIN', async () => {

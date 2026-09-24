@@ -112,10 +112,14 @@ export class SupabaseSyncService {
     }
 
     try {
-      await new Promise((r) => setTimeout(r, 600));
-
-      const entryIds = pending.entries.map((e) => e.id);
-      await this.offlineStorage.markEntriesAsSynced(entryIds, {});
+      // Actually upload what was saved offline, then mark only the accepted ones as synced
+      const uploaded = await this.offlineStorage.uploadPending(pending.entries, pending.screenshots);
+      const shotMap: Record<string, { fileId: string; viewUrl: string }> = {};
+      for (const id of uploaded.screenshotIds) shotMap[id] = { fileId: '', viewUrl: '' };
+      await this.offlineStorage.markEntriesAsSynced(uploaded.entryIds, shotMap);
+      if (uploaded.errors.length) {
+        throw new Error(`${uploaded.errors.length} item(s) could not be uploaded (${uploaded.errors[0]})`);
+      }
 
       const settings = await this.offlineStorage.getSettings();
       settings.lastSyncTime = Date.now();
@@ -126,7 +130,7 @@ export class SupabaseSyncService {
 
       const res: SyncResult = {
         success: true,
-        message: `Synced ${pending.entries.length} time log(s) and ${pending.screenshots.length} screenshot(s) to Supabase!`,
+        message: `Synced ${pending.entries.length} time log(s) and ${pending.screenshots.length} screenshot(s) to the cloud.`,
         syncedEntriesCount: pending.entries.length,
         syncedScreenshotsCount: pending.screenshots.length,
         timestamp: Date.now(),

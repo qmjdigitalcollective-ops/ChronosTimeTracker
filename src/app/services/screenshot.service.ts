@@ -183,7 +183,7 @@ export class ScreenshotService {
     ctx.textBaseline = 'middle';
 
     const timestampStr = new Date().toLocaleString();
-    const text = `🕒 ${timestampStr} | 👤 ${meta.employeeName} | 🏢 ${meta.clientName} | 📋 ${meta.taskDescription}`;
+    const text = `${timestampStr} | ${meta.employeeName} | ${meta.clientName} | ${meta.taskDescription}`;
     ctx.fillText(text, 14, h - barHeight / 2);
   }
 

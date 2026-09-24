@@ -1,6 +1,8 @@
 import { Injectable, signal } from '@angular/core';
 import { OfflineStorageService } from './offline-storage.service';
 import { ScreenshotService } from './screenshot.service';
+import { payRateFor } from './rates';
+import { effectivePermissions } from './permissions';
 import { SupabaseSyncService } from './google-sync.service';
 import {
   Employee,
@@ -24,6 +26,8 @@ export class TimerService {
   readonly isTakingScreenshot = signal<boolean>(false);
 
   private tickerIntervalId: any = null;
+  /** Team Access → "Screenshots" for the person whose timer is running */
+  private screenshotsAllowed = true;
   private intervalMinutes = 10;
 
   constructor(
@@ -31,18 +35,33 @@ export class TimerService {
     private screenshotService: ScreenshotService,
     private supabaseSync: SupabaseSyncService
   ) {
-    this.restoreActiveSession();
+    // The running timer is restored per signed-in person (see restoreActiveSession),
+    // so one person never picks up someone else's timer.
     this.loadTodayEntries();
   }
 
-  async restoreActiveSession(): Promise<void> {
+  /** Restore the signed-in person's own running/paused timer (if any). */
+  async restoreActiveSession(employeeId: string): Promise<void> {
+    // Reset whatever the previous person on this device had loaded
+    if (this.tickerIntervalId) {
+      clearInterval(this.tickerIntervalId);
+      this.tickerIntervalId = null;
+    }
+    this.activeEntry.set(null);
+    this.status.set('completed');
+    this.elapsedSeconds.set(0);
+    this.pausedSeconds.set(0);
+    this.currentSessionScreenshots.set([]);
+
     try {
       const settings = await this.offlineStorage.getSettings();
       this.intervalMinutes = settings.screenshotIntervalMinutes || 10;
       this.nextScreenshotSeconds.set(this.intervalMinutes * 60);
 
-      const active = await this.offlineStorage.getActiveTimeEntry();
+      const active = await this.offlineStorage.getActiveTimeEntry(employeeId);
       if (active) {
+        const me = await this.offlineStorage.getEmployeeById(employeeId);
+        this.screenshotsAllowed = effectivePermissions(await this.offlineStorage.getPermissions(), me).screenshots;
         this.activeEntry.set(active);
         this.status.set(active.status);
 
@@ -95,13 +114,18 @@ export class TimerService {
       return false;
     }
 
-    const cleanTask = taskDescription.trim() || 'General Work & Development';
+    const cleanTask = taskDescription.trim() || 'General work';
 
     // Request screen permission on clock-in
     await this.screenshotService.requestScreenPermission();
 
     const settings = await this.offlineStorage.getSettings();
     this.intervalMinutes = settings.screenshotIntervalMinutes || 10;
+
+    // Pay rate for this member on this client (Contracts), else their default rate
+    const contracts = await this.offlineStorage.getContracts();
+    const hourlyRate = payRateFor(contracts, employee, client.id);
+    this.screenshotsAllowed = effectivePermissions(await this.offlineStorage.getPermissions(), employee).screenshots;
 
     const now = Date.now();
     const entryId = 'entry_' + now + '_' + Math.random().toString(36).substring(2, 7);
@@ -117,7 +141,7 @@ export class TimerService {
       durationSeconds: 0,
       pausedSeconds: 0,
       status: 'active',
-      hourlyRate: employee.hourlyRate,
+      hourlyRate,
       totalPay: 0,
       screenshotCount: 0,
       syncStatus: 'pending',
@@ -217,7 +241,7 @@ export class TimerService {
 
   async captureScreenshot(): Promise<ScreenshotRecord | null> {
     const entry = this.activeEntry();
-    if (!entry) return null;
+    if (!entry || !this.screenshotsAllowed) return null;
 
     this.isTakingScreenshot.set(true);
 
