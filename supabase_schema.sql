@@ -1,164 +1,168 @@
 -- ─────────────────────────────────────────────────────────────────────────────
--- ⚡ SUPABASE COMPLETE DATABASE SETUP SCRIPT FOR TIME TRACKER
--- Copy and run this entire script in your Supabase SQL Editor:
--- Supabase Dashboard -> SQL Editor -> New Query -> Paste & Run
+-- TIME TRACKER — SUPABASE DATABASE SETUP
+-- Supabase Dashboard → SQL Editor → New query → paste this whole file → Run.
+--
+-- Safe to run more than once: it only creates what is missing and never
+-- deletes rows. Column names are snake_case, which is what the app uses.
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- 1. EMPLOYEES TABLE
+-- 1. EMPLOYEES
 CREATE TABLE IF NOT EXISTS public.employees (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     email TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
-    "hourlyRate" NUMERIC NOT NULL DEFAULT 0,
-    hourly_rate NUMERIC DEFAULT 0,
+    hourly_rate NUMERIC NOT NULL DEFAULT 0,
     pin TEXT,
     department TEXT,
-    "avatarColor" TEXT,
     avatar_color TEXT,
-    active BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    active BOOLEAN NOT NULL DEFAULT true
 );
 
--- 2. CLIENTS TABLE
+-- 2. CLIENTS (projects)
 CREATE TABLE IF NOT EXISTS public.clients (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    code TEXT NOT NULL,
-    "defaultRate" NUMERIC DEFAULT 0,
-    default_rate NUMERIC DEFAULT 0,
+    code TEXT NOT NULL DEFAULT '',
+    default_rate NUMERIC,
     color TEXT,
-    active BOOLEAN NOT NULL DEFAULT true,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    active BOOLEAN NOT NULL DEFAULT true
 );
 
--- 3. TIME ENTRIES TABLE
+-- 3. TIME ENTRIES
 CREATE TABLE IF NOT EXISTS public.time_entries (
     id TEXT PRIMARY KEY,
-    "employeeId" TEXT NOT NULL,
-    employee_id TEXT,
-    "employeeName" TEXT NOT NULL,
-    employee_name TEXT,
-    "clientId" TEXT NOT NULL,
-    client_id TEXT,
-    "clientName" TEXT NOT NULL,
-    client_name TEXT,
-    "taskDescription" TEXT NOT NULL,
-    task_description TEXT,
-    "startTime" BIGINT NOT NULL,
-    start_time BIGINT,
-    "endTime" BIGINT,
+    employee_id TEXT NOT NULL,
+    employee_name TEXT NOT NULL DEFAULT '',
+    client_id TEXT NOT NULL,
+    client_name TEXT NOT NULL DEFAULT '',
+    task_description TEXT NOT NULL DEFAULT '',
+    start_time BIGINT NOT NULL,
     end_time BIGINT,
-    "durationSeconds" INTEGER NOT NULL DEFAULT 0,
-    duration_seconds INTEGER DEFAULT 0,
-    "pausedSeconds" INTEGER NOT NULL DEFAULT 0,
-    paused_seconds INTEGER DEFAULT 0,
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    paused_seconds INTEGER NOT NULL DEFAULT 0,
     status TEXT NOT NULL DEFAULT 'completed',
-    "hourlyRate" NUMERIC NOT NULL DEFAULT 0,
-    hourly_rate NUMERIC DEFAULT 0,
-    "totalPay" NUMERIC NOT NULL DEFAULT 0,
-    total_pay NUMERIC DEFAULT 0,
-    "screenshotCount" INTEGER NOT NULL DEFAULT 0,
-    screenshot_count INTEGER DEFAULT 0,
-    "syncStatus" TEXT NOT NULL DEFAULT 'synced',
-    sync_status TEXT DEFAULT 'synced',
-    "syncedAt" BIGINT,
-    synced_at BIGINT,
-    "lastSyncError" TEXT,
-    last_sync_error TEXT,
-    "lastPauseTime" BIGINT,
-    last_pause_time BIGINT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    hourly_rate NUMERIC NOT NULL DEFAULT 0,
+    total_pay NUMERIC NOT NULL DEFAULT 0,
+    screenshot_count INTEGER NOT NULL DEFAULT 0,
+    last_pause_time BIGINT
 );
 
--- 4. SCREENSHOTS TABLE
+-- 4. SCREENSHOTS
 CREATE TABLE IF NOT EXISTS public.screenshots (
     id TEXT PRIMARY KEY,
-    "timeEntryId" TEXT NOT NULL,
-    time_entry_id TEXT,
-    "employeeId" TEXT NOT NULL,
-    employee_id TEXT,
-    "employeeName" TEXT NOT NULL,
-    employee_name TEXT,
+    time_entry_id TEXT NOT NULL,
+    employee_id TEXT NOT NULL,
+    employee_name TEXT NOT NULL DEFAULT '',
     timestamp BIGINT NOT NULL,
-    "imageDataUrl" TEXT NOT NULL,
-    image_data_url TEXT,
-    "thumbnailDataUrl" TEXT,
+    image_data_url TEXT NOT NULL,
     thumbnail_data_url TEXT,
-    "driveFileId" TEXT,
     drive_file_id TEXT,
-    "driveViewUrl" TEXT,
-    drive_view_url TEXT,
-    synced BOOLEAN NOT NULL DEFAULT true,
-    "syncedAt" BIGINT,
-    synced_at BIGINT,
-    created_at TIMESTAMPTZ DEFAULT NOW()
+    drive_view_url TEXT
 );
 
--- 5. APP SETTINGS TABLE
+-- 5. APP SETTINGS (one row)
 CREATE TABLE IF NOT EXISTS public.app_settings (
     id TEXT PRIMARY KEY DEFAULT 'appSettings',
-    "screenshotIntervalMinutes" INTEGER NOT NULL DEFAULT 10,
-    screenshot_interval_minutes INTEGER DEFAULT 10,
-    "autoSync" BOOLEAN NOT NULL DEFAULT true,
-    auto_sync BOOLEAN DEFAULT true,
-    "adminPin" TEXT NOT NULL DEFAULT 'admin123',
-    admin_pin TEXT DEFAULT 'admin123',
-    "activeEmployeeId" TEXT,
+    screenshot_interval_minutes INTEGER NOT NULL DEFAULT 10,
+    admin_pin TEXT NOT NULL DEFAULT 'admin123',
     active_employee_id TEXT,
-    "activeRole" TEXT,
     active_role TEXT,
-    "lastSyncTime" BIGINT,
-    last_sync_time BIGINT,
-    "allowMockScreenshotsIfDenied" BOOLEAN NOT NULL DEFAULT true,
-    allow_mock_screenshots_if_denied BOOLEAN DEFAULT true,
+    allow_mock_screenshots_if_denied BOOLEAN NOT NULL DEFAULT true
+);
+
+-- 6. CONTRACTS (pay & bill rate per member per project)
+CREATE TABLE IF NOT EXISTS public.contracts (
+    id TEXT PRIMARY KEY,
+    employee_id TEXT NOT NULL,
+    client_id TEXT NOT NULL,
+    pay_rate NUMERIC NOT NULL DEFAULT 0,
+    bill_rate NUMERIC NOT NULL DEFAULT 0,
+    weekly_limit_hours NUMERIC,
+    active BOOLEAN NOT NULL DEFAULT true
+);
+
+-- 7. PAYOUTS (who was paid for which pay period)
+CREATE TABLE IF NOT EXISTS public.payouts (
+    id TEXT PRIMARY KEY,
+    employee_id TEXT NOT NULL,
+    employee_name TEXT NOT NULL DEFAULT '',
+    period_start BIGINT NOT NULL,
+    period_end BIGINT NOT NULL,
+    hours NUMERIC NOT NULL DEFAULT 0,
+    amount NUMERIC NOT NULL DEFAULT 0,
+    paid_at BIGINT NOT NULL,
+    note TEXT
+);
+
+-- 8. TIMESHEET APPROVALS (member submits, admin approves)
+CREATE TABLE IF NOT EXISTS public.timesheet_approvals (
+    id TEXT PRIMARY KEY,
+    employee_id TEXT NOT NULL,
+    employee_name TEXT NOT NULL DEFAULT '',
+    period_start BIGINT NOT NULL,
+    period_end BIGINT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'submitted',
+    hours NUMERIC NOT NULL DEFAULT 0,
+    submitted_at BIGINT NOT NULL,
+    reviewed_at BIGINT,
+    note TEXT
+);
+
+-- 9. TEAM ACCESS (id = 'default' for everyone, or an employee id)
+CREATE TABLE IF NOT EXISTS public.team_permissions (
+    id TEXT PRIMARY KEY,
+    permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Older setups have sync columns the app no longer writes; make sure they can't block saves
+DO $$
+DECLARE
+  c RECORD;
+BEGIN
+  FOR c IN
+    SELECT table_name, column_name FROM information_schema.columns
+    WHERE table_schema = 'public' AND is_nullable = 'NO' AND (table_name, column_name) IN (
+      ('time_entries', 'sync_status'), ('time_entries', 'synced_at'), ('time_entries', 'last_sync_error'),
+      ('screenshots', 'synced'), ('screenshots', 'synced_at'),
+      ('app_settings', 'auto_sync'), ('app_settings', 'last_sync_time')
+    )
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I ALTER COLUMN %I DROP NOT NULL', c.table_name, c.column_name);
+  END LOOP;
+END $$;
+
+-- Settings row, only if the table is empty
+INSERT INTO public.app_settings (id)
+SELECT 'appSettings' WHERE NOT EXISTS (SELECT 1 FROM public.app_settings);
+
 -- ─────────────────────────────────────────────────────────────────────────────
--- ROW LEVEL SECURITY (RLS) POLICIES
--- Enable RLS and grant FULL PUBLIC ACCESS to anon/authenticated users
+-- ACCESS
+-- The app signs people in with its own email + PIN check (not Supabase Auth),
+-- so it talks to the database as the public "anon" role. Every table must let
+-- that role read and write, otherwise the app sees empty tables — which is why
+-- sign-in said "Email or Employee ID not found".
 -- ─────────────────────────────────────────────────────────────────────────────
 
-ALTER TABLE public.employees ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.clients ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.time_entries ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.screenshots ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.app_settings ENABLE ROW LEVEL SECURITY;
+DO $$
+DECLARE
+  t TEXT;
+BEGIN
+  FOREACH t IN ARRAY ARRAY[
+    'employees', 'clients', 'time_entries', 'screenshots', 'app_settings',
+    'contracts', 'payouts', 'timesheet_approvals', 'team_permissions'
+  ]
+  LOOP
+    EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
+    EXECUTE format('GRANT SELECT, INSERT, UPDATE, DELETE ON public.%I TO anon, authenticated', t);
+    EXECUTE format('DROP POLICY IF EXISTS "App full access" ON public.%I', t);
+    EXECUTE format(
+      'CREATE POLICY "App full access" ON public.%I FOR ALL TO anon, authenticated USING (true) WITH CHECK (true)',
+      t
+    );
+  END LOOP;
+END $$;
 
--- Drop existing policies if any
-DROP POLICY IF EXISTS "Public Full Access Employees" ON public.employees;
-DROP POLICY IF EXISTS "Public Full Access Clients" ON public.clients;
-DROP POLICY IF EXISTS "Public Full Access Time Entries" ON public.time_entries;
-DROP POLICY IF EXISTS "Public Full Access Screenshots" ON public.screenshots;
-DROP POLICY IF EXISTS "Public Full Access App Settings" ON public.app_settings;
-
--- Create permissive RLS policies
-CREATE POLICY "Public Full Access Employees" ON public.employees FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Public Full Access Clients" ON public.clients FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Public Full Access Time Entries" ON public.time_entries FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Public Full Access Screenshots" ON public.screenshots FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Public Full Access App Settings" ON public.app_settings FOR ALL USING (true) WITH CHECK (true);
-
--- Seed Initial Default Employees if empty
-INSERT INTO public.employees (id, name, email, role, "hourlyRate", pin, department, "avatarColor", active)
-VALUES 
-  ('emp-1', 'Queen (Owner)', 'qmjdigitalcollective@gmail.com', 'admin', 0, 'queen23', 'Owner', '#063c35', true),
-  ('emp-2', 'John Doe (Developer)', 'john.doe@example.com', 'user', 35.0, '1234', 'Engineering', '#0ea5e9', true),
-  ('emp-3', 'Jane Smith (UI Designer)', 'jane.smith@example.com', 'user', 40.0, '1234', 'Product Design', '#ec4899', true),
-  ('emp-4', 'Alex Rivera (QA Tester)', 'alex.rivera@example.com', 'user', 30.0, '1234', 'Quality Assurance', '#10b981', true)
-ON CONFLICT (id) DO NOTHING;
-
--- Seed Initial Default Clients if empty
-INSERT INTO public.clients (id, name, code, "defaultRate", color, active)
-VALUES
-  ('cli-1', 'Acme Corporation', 'ACM', 50, '#3b82f6', true),
-  ('cli-2', 'Stark Global', 'STK', 65, '#ef4444', true),
-  ('cli-3', 'Wayne Enterprises', 'WYN', 75, '#10b981', true),
-  ('cli-4', 'Cyberdyne Systems', 'CYB', 45, '#8b5cf6', true)
-ON CONFLICT (id) DO NOTHING;
-
--- Seed Initial Default App Settings if empty
-INSERT INTO public.app_settings (id, "screenshotIntervalMinutes", "autoSync", "adminPin", "allowMockScreenshotsIfDenied")
-VALUES ('appSettings', 10, true, 'admin123', true)
-ON CONFLICT (id) DO NOTHING;
+-- Refresh the API so new tables are visible right away
+NOTIFY pgrst, 'reload schema';

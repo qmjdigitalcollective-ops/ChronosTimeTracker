@@ -1,7 +1,7 @@
 import { Component, OnInit, effect, signal } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { OfflineStorageService } from '../../services/offline-storage.service';
+import { DataService } from '../../services/data.service';
 import { TimerService } from '../../services/timer.service';
 import { AuthService } from '../../services/auth.service';
 import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
@@ -311,7 +311,6 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
                   <th>End</th>
                   <th>Duration</th>
                   <th class="money-item">Earnings</th>
-                  <th>Sync Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -328,15 +327,6 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
                     <td>{{ entry.endTime ? formatTime(entry.endTime) : 'In Progress' }}</td>
                     <td class="duration-cell">{{ entry.durationSeconds | formatDuration }}</td>
                     <td class="pay-cell money-item">{{ entry.totalPay | money }}</td>
-                    <td>
-                      <span
-                        class="badge"
-                        [class.badge-synced]="entry.syncStatus === 'synced'"
-                        [class.badge-pending]="entry.syncStatus !== 'synced'"
-                      >
-                        {{ entry.syncStatus === 'synced' ? 'Synced' : 'Waiting to sync' }}
-                      </span>
-                    </td>
                   </tr>
                 }
               </tbody>
@@ -795,16 +785,6 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
       font-size: 0.75rem;
       font-weight: 600;
     }
-    .badge-synced {
-      background: rgba(16, 185, 129, 0.15);
-      color: var(--av-green-text);
-      border: 1px solid rgba(16, 185, 129, 0.3);
-    }
-    .badge-pending {
-      background: rgba(245, 158, 11, 0.15);
-      color: var(--av-amber-text);
-      border: 1px solid rgba(245, 158, 11, 0.3);
-    }
     .modal-overlay {
       position: fixed;
       inset: 0;
@@ -1210,7 +1190,7 @@ export class UserTrackerComponent implements OnInit {
   readonly lastPeriodLabel = formatPeriod(...this.lastPeriod);
 
   constructor(
-    private offlineStorage: OfflineStorageService,
+    private db: DataService,
     public timerService: TimerService,
     public authService: AuthService
   ) {
@@ -1225,14 +1205,14 @@ export class UserTrackerComponent implements OnInit {
     const me = this.authService.currentUser();
     if (!me) return;
     const [entries, payouts, approvals] = await Promise.all([
-      this.offlineStorage.getTimeEntries(),
-      this.offlineStorage.getPayouts(),
-      this.offlineStorage.getApprovals(),
+      this.db.getTimeEntries(),
+      this.db.getPayouts(),
+      this.db.getApprovals(),
     ]);
     this.myEntries.set(entries.filter((e) => e.employeeId === me.id));
     this.myPayouts.set(payouts.filter((p) => p.employeeId === me.id));
     this.myApprovals.set(approvals.filter((a) => a.employeeId === me.id));
-    this.perms.set(effectivePermissions(await this.offlineStorage.getPermissions(), me));
+    this.perms.set(effectivePermissions(await this.db.getPermissions(), me));
     if (!this.perms().viewHistory) this.historyView.set('today');
   }
 
@@ -1285,7 +1265,7 @@ export class UserTrackerComponent implements OnInit {
     const hours = this.periodSeconds(period) / 3600;
     const ok = confirm(`Submit your timesheet for ${formatPeriod(...period)} (${hours.toFixed(2)} hours)?`);
     if (!ok) return;
-    await this.offlineStorage.saveApproval({
+    await this.db.saveApproval({
       id: `${me.id}_${period[0].getTime()}`,
       employeeId: me.id,
       employeeName: me.name,
@@ -1388,11 +1368,11 @@ export class UserTrackerComponent implements OnInit {
   }
 
   async loadClients(): Promise<void> {
-    const [all, contracts] = await Promise.all([this.offlineStorage.getClients(), this.offlineStorage.getContracts()]);
+    const [all, contracts] = await Promise.all([this.db.getClients(), this.db.getContracts()]);
     // Like WebWork: members only see projects they have a contract on (admins, or members with no contracts, see all)
     const me = this.authService.currentUser();
     const mine = new Set(contracts.filter((c) => c.active && c.employeeId === me?.id).map((c) => c.clientId));
-    const allowAll = effectivePermissions(await this.offlineStorage.getPermissions(), me).allProjects;
+    const allowAll = effectivePermissions(await this.db.getPermissions(), me).allProjects;
     const list = allowAll || mine.size === 0 ? all : all.filter((c) => mine.has(c.id));
     this.clients.set(list);
     if (list.length > 0 && !list.some((c) => c.id === this.selectedClientId())) {
@@ -1424,11 +1404,21 @@ export class UserTrackerComponent implements OnInit {
 
     if (!emp || !cli) return;
 
-    await this.timerService.clockIn(emp, cli, this.taskDescription());
+    try {
+      await this.timerService.clockIn(emp, cli, this.taskDescription());
+    } catch (e) {
+      console.error('Clock in failed:', e);
+      alert('Could not start your timer — the database did not respond. Check your internet connection and try again.');
+    }
   }
 
   async onClockOutClick(): Promise<void> {
-    await this.timerService.clockOut();
+    try {
+      await this.timerService.clockOut();
+    } catch (e) {
+      console.error('Clock out failed:', e);
+      alert('Could not save your time — the database did not respond. Keep this page open and try Clock Out again.');
+    }
   }
 
   formatTime(ms: number): string {

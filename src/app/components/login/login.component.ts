@@ -61,7 +61,7 @@ import { AuthService } from '../../services/auth.service';
         <div class="login-footer">
           <span class="offline-badge">
             <span class="dot"></span>
-            Works offline · syncs when you're back online
+            Saved to the cloud · needs internet
           </span>
         </div>
       </div>
@@ -250,11 +250,14 @@ export class LoginComponent {
     this.errorMessage.set(null);
     this.loading.set(true);
 
-    const res = await this.authService.loginByUsername(this.username, this.pin);
-    this.loading.set(false);
-
-    if (!res.success) {
-      this.errorMessage.set(res.message);
+    try {
+      const res = await this.authService.loginByUsername(this.username, this.pin);
+      if (!res.success) this.errorMessage.set(res.message);
+    } catch (e) {
+      console.error('Sign-in failed:', e);
+      this.errorMessage.set('Could not reach the database. Check your internet connection and try again.');
+    } finally {
+      this.loading.set(false);
     }
   }
 }

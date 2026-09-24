@@ -2,8 +2,6 @@ export type UserRole = 'admin' | 'user';
 
 export type EntryStatus = 'active' | 'paused' | 'completed';
 
-export type SyncStatus = 'synced' | 'pending' | 'failed';
-
 export interface Employee {
   id: string;
   name: string;
@@ -35,8 +33,6 @@ export interface ScreenshotRecord {
   thumbnailDataUrl?: string;
   driveFileId?: string;
   driveViewUrl?: string;
-  synced: boolean;
-  syncedAt?: number;
 }
 
 export interface TimeEntry {
@@ -54,19 +50,14 @@ export interface TimeEntry {
   hourlyRate: number; // Frozen at entry creation
   totalPay: number; // (durationSeconds / 3600) * hourlyRate
   screenshotCount: number;
-  syncStatus: SyncStatus;
-  syncedAt?: number;
-  lastSyncError?: string;
   lastPauseTime?: number; // Epoch ms when paused
 }
 
 export interface AppSettings {
   screenshotIntervalMinutes: number; // default 10
-  autoSync: boolean;
   adminPin: string; // Default 'admin123'
   activeEmployeeId?: string;
   activeRole?: UserRole;
-  lastSyncTime?: number;
   allowMockScreenshotsIfDenied: boolean;
 }
 

@@ -2,8 +2,7 @@ import { Component, OnDestroy, OnInit, effect, signal, untracked } from '@angula
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AuthService } from '../../services/auth.service';
-import { OfflineStorageService } from '../../services/offline-storage.service';
-import { SupabaseSyncService } from '../../services/google-sync.service';
+import { DataService } from '../../services/data.service';
 import { TimerService } from '../../services/timer.service';
 import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
 import { MoneyPipe } from '../../pipes/money.pipe';
@@ -616,7 +615,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
             </table>
           </div>
           <p class="earnings-note">
-            Status comes from each person's timer. If someone is offline, their status updates once their app syncs.
+            Status comes from each person's timer. It updates as soon as they start, pause or stop their timer.
           </p>
         </div>
       }
@@ -1020,7 +1019,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
         @if (!cloudTablesReady()) {
           <div class="setup-banner">
             <app-icon name="alert" [size]="16" /> <strong>One-time setup needed:</strong> the database doesn't have the Contracts, Payments and Timesheet Approval tables yet, so
-            those are only saved on this computer. Ask IT to run <code>supabase_migration_002_contracts.sql</code> in Supabase.
+            they can't be saved. Run <code>supabase_schema.sql</code> in Supabase → SQL Editor.
           </div>
         }
 
@@ -1178,9 +1177,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
                     <span class="gallery-time">{{ formatTime(ss.timestamp) }}</span>
                   </div>
                   <div class="gallery-date">{{ formatDate(ss.timestamp) }}</div>
-                  @if (ss.synced) {
-                    <span class="synced-tag"><app-icon name="check" [size]="12" /> Synced</span>
-                  }
                 </div>
               </div>
             } @empty {
@@ -1355,24 +1351,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
               </div>
             </div>
 
-            <!-- Auto Sync Toggle -->
-            <div class="setting-item">
-              <div class="setting-label-col">
-                <label class="setting-title">Auto-Sync to Supabase</label>
-                <p class="setting-desc">Automatically mark time entries as synced in Supabase whenever you are online.</p>
-              </div>
-              <div class="setting-input-col">
-                <label class="toggle-switch">
-                  <input
-                    type="checkbox"
-                    [ngModel]="settings()?.autoSync"
-                    (ngModelChange)="onAutoSyncChange($event)"
-                  />
-                  <span class="toggle-slider"></span>
-                </label>
-              </div>
-            </div>
-
             <!-- Admin PIN Change -->
             <div class="setting-item">
               <div class="setting-label-col">
@@ -1409,20 +1387,18 @@ const DAY_MS = 24 * 60 * 60 * 1000;
               <div class="guide-header">
                 <div>
                   <h4 class="guide-title">Cloud database (Supabase)</h4>
-                  <p class="guide-sub">All data is stored in Supabase Postgres database with offline persistence. Changes sync automatically when you are online.</p>
+                  <p class="guide-sub">All data is saved straight to the Supabase database. The app needs an internet connection to save changes.</p>
                 </div>
               </div>
               <ul class="steps-list">
                 <li>Employees, clients, time entries and screenshots are stored in <strong>Supabase tables</strong>.</li>
-                <li>Offline local cache ensures the app works without internet.</li>
-                <li>When reconnected, pending entries are automatically marked as <strong>synced</strong>.</li>
                 <li>Manage your data in your <a href="https://supabase.com/dashboard" target="_blank" rel="noopener">Supabase Dashboard</a>.</li>
               </ul>
             </div>
 
             <!-- Backup & Restore -->
             <div class="backup-section">
-              <h4 class="section-title">Local Database Backup &amp; Restore</h4>
+              <h4 class="section-title">Database Backup &amp; Restore</h4>
               <p class="text-xs text-muted">Export a full JSON snapshot of all tracker data or import from a previous backup.</p>
               <div class="backup-btn-row">
                 <button type="button" class="btn-sm" (click)="exportBackup()"><app-icon name="download" [size]="14" /> Export JSON Backup</button>
@@ -3021,7 +2997,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
     .setup-banner { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
     .modal-content-sm, .modal-content { border-radius: 20px; border-color: var(--av-border); }
     .modal-close { display: inline-flex; color: var(--av-text-muted); }
-    .synced-tag { display: inline-flex; align-items: center; gap: 4px; }
     .gallery-zoom-icon { color: var(--av-ivory); }
     /* Collapsible side menu */
     .collapse-btn {
@@ -3382,8 +3357,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   pinSaved = signal<boolean>(false);
 
   constructor(
-    private offlineStorage: OfflineStorageService,
-    private supabaseSync: SupabaseSyncService,
+    private db: DataService,
     public timerService: TimerService,
     public authService: AuthService,
     private nav: NavService
@@ -3408,7 +3382,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     if (me && this.timerService.status() === 'completed') await this.timerService.restoreActiveSession(me.id);
     this.applyPreset('this-period');
     await this.refreshAllData();
-    this.cloudTablesReady.set(await this.offlineStorage.cloudTablesReady());
+    this.cloudTablesReady.set(await this.db.cloudTablesReady());
     // Keep "who's working" fresh
     this.refreshTimer = setInterval(() => this.refreshAllData(), 30000);
   }
@@ -3423,17 +3397,17 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
 
   async refreshAllData(): Promise<void> {
     const [emps, clis, ents, sss, sets, cons, pays] = await Promise.all([
-      this.offlineStorage.getEmployees(),
-      this.offlineStorage.getClients(),
-      this.offlineStorage.getTimeEntries(),
-      this.offlineStorage.getScreenshots(),
-      this.offlineStorage.getSettings(),
-      this.offlineStorage.getContracts(),
-      this.offlineStorage.getPayouts(),
+      this.db.getEmployees(),
+      this.db.getClients(),
+      this.db.getTimeEntries(),
+      this.db.getScreenshots(),
+      this.db.getSettings(),
+      this.db.getContracts(),
+      this.db.getPayouts(),
     ]);
 
-    this.approvals.set(await this.offlineStorage.getApprovals());
-    this.permissionRows.set(await this.offlineStorage.getPermissions());
+    this.approvals.set(await this.db.getApprovals());
+    this.permissionRows.set(await this.db.getPermissions());
     this.contracts.set(cons);
     this.payouts.set(pays);
     this.lastRefresh.set(Date.now());
@@ -3981,7 +3955,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     if (!this.canMarkPaid()) return;
     const ok = confirm(`Record that ${row.employeeName} was paid ${this.money.transform(row.totalPay)} for ${this.rangeLabel()}?`);
     if (!ok) return;
-    await this.offlineStorage.savePayout({
+    await this.db.savePayout({
       id: 'pay_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
       employeeId: row.employeeId,
       employeeName: row.employeeName,
@@ -3991,13 +3965,13 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       amount: parseFloat(row.totalPay.toFixed(2)),
       paidAt: Date.now(),
     });
-    this.payouts.set(await this.offlineStorage.getPayouts());
+    this.payouts.set(await this.db.getPayouts());
   }
 
   async undoPayout(id: string): Promise<void> {
     if (!confirm('Remove this payment record? (This does not move any money — it only changes the record.)')) return;
-    await this.offlineStorage.deletePayout(id);
-    this.payouts.set(await this.offlineStorage.getPayouts());
+    await this.db.deletePayout(id);
+    this.payouts.set(await this.db.getPayouts());
   }
 
   totalPaidInRange(): number {
@@ -4061,7 +4035,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     }
     const start = this.rangeStart()!.getTime();
     const existing = this.approvalFor(row.employeeId);
-    await this.offlineStorage.saveApproval({
+    await this.db.saveApproval({
       id: `${row.employeeId}_${start}`,
       employeeId: row.employeeId,
       employeeName: row.employeeName,
@@ -4073,7 +4047,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       reviewedAt: Date.now(),
       note,
     });
-    this.approvals.set(await this.offlineStorage.getApprovals());
+    this.approvals.set(await this.db.getApprovals());
   }
 
   /** Open this member's timesheet for the same dates. */
@@ -4094,7 +4068,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     const value = field === 'hourlyRate' ? Math.max(0, Number(raw) || 0) : String(raw).trim();
     if (field === 'name' && !value) return;
     const updated: Employee = { ...emp, [field]: value } as Employee;
-    await this.offlineStorage.saveEmployee(updated);
+    await this.db.saveEmployee(updated);
     if (this.authService.currentUser()?.id === emp.id) this.authService.currentUser.set(updated);
     this.employees.set(this.employees().map((e) => (e.id === emp.id ? updated : e)));
     this.flash(`Saved ${updated.name}`);
@@ -4105,7 +4079,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       field === 'defaultRate' ? Math.max(0, Number(raw) || 0) : field === 'code' ? String(raw).trim().toUpperCase() : String(raw).trim();
     if (field === 'name' && !value) return;
     const updated: Client = { ...cli, [field]: value } as Client;
-    await this.offlineStorage.saveClient(updated);
+    await this.db.saveClient(updated);
     this.clients.set(this.clients().map((c) => (c.id === cli.id ? updated : c)));
     this.flash(`Saved ${updated.name}`);
   }
@@ -4114,7 +4088,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     const n = Number(raw);
     const value = field === 'weeklyLimitHours' ? (raw === '' || !n ? undefined : Math.max(0, n)) : Math.max(0, n || 0);
     const updated: Contract = { ...c, [field]: value };
-    await this.offlineStorage.saveContract(updated);
+    await this.db.saveContract(updated);
     this.contracts.set(this.contracts().map((x) => (x.id === c.id ? updated : x)));
     this.flash(`Saved rate for ${this.employeeName(c.employeeId)} · ${this.clientName(c.clientId)}`);
   }
@@ -4128,7 +4102,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       value = d.getTime() + 12 * 60 * 60 * 1000; // midday, so time zones don't shift the date
     } else value = String(raw).trim() || undefined;
     const updated: Payout = { ...p, [field]: value } as Payout;
-    await this.offlineStorage.savePayout(updated);
+    await this.db.savePayout(updated);
     this.payouts.set(this.payouts().map((x) => (x.id === p.id ? updated : x)));
     this.flash(`Saved payment for ${p.employeeName}`);
   }
@@ -4278,14 +4252,14 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   async setPermission(id: string, key: keyof MemberPermissions, value: boolean): Promise<void> {
     const current =
       id === 'default' ? this.defaultPermissions() : this.memberPermissions(this.employees().find((e) => e.id === id)!);
-    await this.offlineStorage.savePermission({ id, permissions: { ...current, [key]: value } });
-    this.permissionRows.set(await this.offlineStorage.getPermissions());
+    await this.db.savePermission({ id, permissions: { ...current, [key]: value } });
+    this.permissionRows.set(await this.db.getPermissions());
     this.flash('Team access saved');
   }
 
   async resetPermissions(employeeId: string): Promise<void> {
-    await this.offlineStorage.deletePermission(employeeId);
-    this.permissionRows.set(await this.offlineStorage.getPermissions());
+    await this.db.deletePermission(employeeId);
+    this.permissionRows.set(await this.db.getPermissions());
     this.flash('Now uses the Everyone setting');
   }
 
@@ -4389,9 +4363,9 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     // One contract per member per project
     const existing = this.contracts().find((c) => c.employeeId === f.employeeId && c.clientId === f.clientId && c.id !== editing?.id);
     if (existing && !confirm('This member already has a contract on this project. Replace it?')) return;
-    if (existing) await this.offlineStorage.deleteContract(existing.id);
+    if (existing) await this.db.deleteContract(existing.id);
 
-    await this.offlineStorage.saveContract({
+    await this.db.saveContract({
       id: editing?.id || `con_${f.employeeId}_${f.clientId}`,
       employeeId: f.employeeId,
       clientId: f.clientId,
@@ -4401,13 +4375,13 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       active: true,
     });
     this.showContractModal.set(false);
-    this.contracts.set(await this.offlineStorage.getContracts());
+    this.contracts.set(await this.db.getContracts());
   }
 
   async deleteContract(id: string): Promise<void> {
     if (!confirm('Delete this contract? New time will use the default rates.')) return;
-    await this.offlineStorage.deleteContract(id);
-    this.contracts.set(await this.offlineStorage.getContracts());
+    await this.db.deleteContract(id);
+    this.contracts.set(await this.db.getContracts());
   }
 
   // --- Add / Edit time ---
@@ -4494,10 +4468,9 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       status: 'completed',
       hourlyRate,
       totalPay: parseFloat(((durationSeconds / 3600) * hourlyRate).toFixed(2)),
-      syncStatus: 'pending',
     } as TimeEntry;
 
-    await this.offlineStorage.saveTimeEntry(entry);
+    await this.db.saveTimeEntry(entry);
     this.showTimeModal.set(false);
     await this.refreshAllData();
   }
@@ -4555,7 +4528,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       active: true,
     };
 
-    await this.offlineStorage.saveEmployee(emp);
+    await this.db.saveEmployee(emp);
 
     // If someone's PIN was reset by hand, this device should ask them to set their own
     // PIN again next time they sign in here, instead of remembering their old one.
@@ -4574,7 +4547,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
 
   async deleteEmployee(id: string): Promise<void> {
     if (confirm('Are you sure you want to delete this employee?')) {
-      await this.offlineStorage.deleteEmployee(id);
+      await this.db.deleteEmployee(id);
       await this.refreshAllData();
     }
   }
@@ -4616,27 +4589,27 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       active: true,
     };
 
-    await this.offlineStorage.saveClient(cli);
+    await this.db.saveClient(cli);
     this.showClientModal.set(false);
     await this.refreshAllData();
   }
 
   async deleteClient(id: string): Promise<void> {
     if (confirm('Are you sure you want to delete this client?')) {
-      await this.offlineStorage.deleteClient(id);
+      await this.db.deleteClient(id);
       await this.refreshAllData();
     }
   }
 
   async deleteEntry(id: string): Promise<void> {
     if (confirm('Delete this time entry and its associated screenshots?')) {
-      await this.offlineStorage.deleteTimeEntry(id);
+      await this.db.deleteTimeEntry(id);
       await this.refreshAllData();
     }
   }
 
   async viewEntryScreenshots(entryId: string): Promise<void> {
-    const list = await this.offlineStorage.getScreenshots(entryId);
+    const list = await this.db.getScreenshots(entryId);
     if (list.length > 0) {
       this.selectedScreenshot.set(list[0]);
     }
@@ -4653,7 +4626,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     const curr = this.settings();
     if (curr) {
       curr.screenshotIntervalMinutes = mins;
-      await this.offlineStorage.saveSettings(curr);
+      await this.db.saveSettings(curr);
       this.settings.set({ ...curr });
       this.timerService.updateIntervalMinutes(mins);
     }
@@ -4665,20 +4638,11 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     const curr = this.settings();
     if (curr) {
       curr.adminPin = pin;
-      await this.offlineStorage.saveSettings(curr);
+      await this.db.saveSettings(curr);
       this.settings.set({ ...curr });
       this.newAdminPin = '';
       this.pinSaved.set(true);
       setTimeout(() => this.pinSaved.set(false), 3000);
-    }
-  }
-
-  async onAutoSyncChange(enabled: boolean): Promise<void> {
-    const curr = this.settings();
-    if (curr) {
-      curr.autoSync = enabled;
-      await this.offlineStorage.saveSettings(curr);
-      this.settings.set({ ...curr });
     }
   }
 
@@ -4699,7 +4663,6 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       `Pay (${CURRENCY_CODE})`,
       `Bill (${CURRENCY_CODE})`,
       'Screenshot Count',
-      'Sync Status',
     ];
 
     const rows = this.filteredEntries().map((e) => [
@@ -4716,7 +4679,6 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       e.totalPay.toFixed(2),
       this.entryBilled(e).toFixed(2),
       e.screenshotCount || 0,
-      e.syncStatus,
     ]);
 
     const csvContent = [headers.join(','), ...rows.map((r) => r.join(','))].join('\n');
@@ -4798,7 +4760,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   }
 
   async exportBackup(): Promise<void> {
-    const json = await this.offlineStorage.exportAllData();
+    const json = await this.db.exportAllData();
     this.downloadFile(json, `auravia_time_backup_${Date.now()}.json`, 'application/json');
   }
 
@@ -4809,7 +4771,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     const reader = new FileReader();
     reader.onload = async () => {
       try {
-        await this.offlineStorage.importData(reader.result as string);
+        await this.db.importData(reader.result as string);
         await this.refreshAllData();
         alert('Data imported successfully!');
       } catch (e) {
@@ -4935,9 +4897,8 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
           hourlyRate,
           totalPay: parseFloat(((durationSeconds / 3600) * hourlyRate).toFixed(2)),
           screenshotCount: 0,
-          syncStatus: 'pending',
         };
-        await this.offlineStorage.saveTimeEntry(entry);
+        await this.db.saveTimeEntry(entry);
         added++;
       }
       this.csvImportResult.set({ total: dataRows.length, added, errors });

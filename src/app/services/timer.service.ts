@@ -1,9 +1,8 @@
 import { Injectable, signal } from '@angular/core';
-import { OfflineStorageService } from './offline-storage.service';
+import { DataService } from './data.service';
 import { ScreenshotService } from './screenshot.service';
 import { payRateFor } from './rates';
 import { effectivePermissions } from './permissions';
-import { SupabaseSyncService } from './google-sync.service';
 import {
   Employee,
   Client,
@@ -31,9 +30,8 @@ export class TimerService {
   private intervalMinutes = 10;
 
   constructor(
-    private offlineStorage: OfflineStorageService,
-    private screenshotService: ScreenshotService,
-    private supabaseSync: SupabaseSyncService
+    private db: DataService,
+    private screenshotService: ScreenshotService
   ) {
     // The running timer is restored per signed-in person (see restoreActiveSession),
     // so one person never picks up someone else's timer.
@@ -54,14 +52,14 @@ export class TimerService {
     this.currentSessionScreenshots.set([]);
 
     try {
-      const settings = await this.offlineStorage.getSettings();
+      const settings = await this.db.getSettings();
       this.intervalMinutes = settings.screenshotIntervalMinutes || 10;
       this.nextScreenshotSeconds.set(this.intervalMinutes * 60);
 
-      const active = await this.offlineStorage.getActiveTimeEntry(employeeId);
+      const active = await this.db.getActiveTimeEntry(employeeId);
       if (active) {
-        const me = await this.offlineStorage.getEmployeeById(employeeId);
-        this.screenshotsAllowed = effectivePermissions(await this.offlineStorage.getPermissions(), me).screenshots;
+        const me = await this.db.getEmployeeById(employeeId);
+        this.screenshotsAllowed = effectivePermissions(await this.db.getPermissions(), me).screenshots;
         this.activeEntry.set(active);
         this.status.set(active.status);
 
@@ -80,14 +78,14 @@ export class TimerService {
           const additionalPaused = Math.max(0, Math.floor((now - active.lastPauseTime) / 1000));
           paused += additionalPaused;
           active.pausedSeconds = paused;
-          await this.offlineStorage.saveTimeEntry(active);
+          await this.db.saveTimeEntry(active);
         }
 
         this.elapsedSeconds.set(totalElapsed);
         this.pausedSeconds.set(paused);
 
         // Load screenshots for this session
-        const screenshots = await this.offlineStorage.getScreenshots(active.id);
+        const screenshots = await this.db.getScreenshots(active.id);
         this.currentSessionScreenshots.set(screenshots);
       }
     } catch (e) {
@@ -97,7 +95,7 @@ export class TimerService {
 
   async loadTodayEntries(): Promise<void> {
     try {
-      const entries = await this.offlineStorage.getTimeEntries();
+      const entries = await this.db.getTimeEntries();
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
 
@@ -119,13 +117,13 @@ export class TimerService {
     // Request screen permission on clock-in
     await this.screenshotService.requestScreenPermission();
 
-    const settings = await this.offlineStorage.getSettings();
+    const settings = await this.db.getSettings();
     this.intervalMinutes = settings.screenshotIntervalMinutes || 10;
 
     // Pay rate for this member on this client (Contracts), else their default rate
-    const contracts = await this.offlineStorage.getContracts();
+    const contracts = await this.db.getContracts();
     const hourlyRate = payRateFor(contracts, employee, client.id);
-    this.screenshotsAllowed = effectivePermissions(await this.offlineStorage.getPermissions(), employee).screenshots;
+    this.screenshotsAllowed = effectivePermissions(await this.db.getPermissions(), employee).screenshots;
 
     const now = Date.now();
     const entryId = 'entry_' + now + '_' + Math.random().toString(36).substring(2, 7);
@@ -144,10 +142,9 @@ export class TimerService {
       hourlyRate,
       totalPay: 0,
       screenshotCount: 0,
-      syncStatus: 'pending',
     };
 
-    await this.offlineStorage.saveTimeEntry(newEntry);
+    await this.db.saveTimeEntry(newEntry);
     this.activeEntry.set(newEntry);
     this.status.set('active');
     this.elapsedSeconds.set(0);
@@ -156,7 +153,6 @@ export class TimerService {
     this.currentSessionScreenshots.set([]);
 
     this.startTicker();
-    await this.supabaseSync.checkPendingCounts();
 
     // Trigger an initial capture 2 seconds in to verify capture is working
     setTimeout(() => {
@@ -180,7 +176,7 @@ export class TimerService {
     entry.durationSeconds = this.elapsedSeconds();
     entry.totalPay = (entry.durationSeconds / 3600) * entry.hourlyRate;
 
-    await this.offlineStorage.saveTimeEntry(entry);
+    await this.db.saveTimeEntry(entry);
     this.activeEntry.set(entry);
     this.status.set('paused');
   }
@@ -198,7 +194,7 @@ export class TimerService {
     }
 
     entry.status = 'active';
-    await this.offlineStorage.saveTimeEntry(entry);
+    await this.db.saveTimeEntry(entry);
     this.activeEntry.set(entry);
     this.status.set('active');
 
@@ -211,6 +207,7 @@ export class TimerService {
 
     this.stopTicker();
     const now = Date.now();
+    const before = { ...entry };
 
     // Finalize duration and earnings
     const finalDuration = this.elapsedSeconds();
@@ -220,7 +217,16 @@ export class TimerService {
     entry.totalPay = parseFloat(((finalDuration / 3600) * entry.hourlyRate).toFixed(2));
     delete entry.lastPauseTime;
 
-    await this.offlineStorage.saveTimeEntry(entry);
+    try {
+      await this.db.saveTimeEntry(entry);
+    } catch (e) {
+      // Not saved — keep the timer going so no time is lost, and let the caller retry
+      Object.assign(entry, before);
+      if (!('lastPauseTime' in before)) delete entry.lastPauseTime;
+      delete entry.endTime;
+      if (before.status === 'active') this.startTicker();
+      throw e;
+    }
 
     // Stop screen capture
     this.screenshotService.stopScreenCapture();
@@ -233,8 +239,6 @@ export class TimerService {
     this.currentSessionScreenshots.set([]);
 
     await this.loadTodayEntries();
-    await this.supabaseSync.checkPendingCounts();
-    await this.supabaseSync.autoSyncIfEnabled();
 
     return entry;
   }
@@ -266,14 +270,13 @@ export class TimerService {
         timestamp: now,
         imageDataUrl: frame.full,
         thumbnailDataUrl: frame.thumb,
-        synced: false,
       };
 
-      await this.offlineStorage.saveScreenshot(ssRecord);
+      await this.db.saveScreenshot(ssRecord);
 
       // Update entry screenshot count
       entry.screenshotCount = (entry.screenshotCount || 0) + 1;
-      await this.offlineStorage.saveTimeEntry(entry);
+      await this.db.saveTimeEntry(entry);
       this.activeEntry.set({ ...entry });
 
       // Update session screenshots signal
@@ -282,8 +285,6 @@ export class TimerService {
       // Reset countdown
       this.nextScreenshotSeconds.set(this.intervalMinutes * 60);
 
-      await this.supabaseSync.checkPendingCounts();
-      await this.supabaseSync.autoSyncIfEnabled();
 
       return ssRecord;
     } catch (e) {
@@ -311,7 +312,7 @@ export class TimerService {
           const entry = this.activeEntry()!;
           entry.durationSeconds = nextElapsed;
           entry.totalPay = (nextElapsed / 3600) * entry.hourlyRate;
-          this.offlineStorage.saveTimeEntry(entry).catch(() => {});
+          this.db.saveTimeEntry(entry).catch(() => {});
         }
 
         // Countdown for screenshots

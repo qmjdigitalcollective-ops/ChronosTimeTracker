@@ -2,7 +2,6 @@ import { Component, effect, output, signal, untracked } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AuthService } from '../../services/auth.service';
-import { SupabaseSyncService, SyncResult } from '../../services/google-sync.service';
 import { UserRole } from '../../models/time-tracker.models';
 import { IconComponent } from '../icon/icon.component';
 import { TimerService } from '../../services/timer.service';
@@ -55,44 +54,9 @@ import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
         </div>
 
         <!-- Online / Offline Badge -->
-        <div class="status-pill" [class.online]="supabaseSync.isOnline()" [class.offline]="!supabaseSync.isOnline()">
+        <div class="status-pill" [class.online]="isOnline()" [class.offline]="!isOnline()">
           <span class="dot"></span>
-          <span>{{ supabaseSync.isOnline() ? 'Online' : 'Offline' }}</span>
-        </div>
-
-        <!-- Sync Button & Pending Counter -->
-        <div class="sync-group">
-          @if (supabaseSync.pendingEntriesCount() > 0 || supabaseSync.pendingScreenshotsCount() > 0) {
-            <span class="pending-badge" title="Pending sync items in local storage">
-              {{ supabaseSync.pendingEntriesCount() }} logs • {{ supabaseSync.pendingScreenshotsCount() }} imgs
-            </span>
-          }
-
-          <button
-            type="button"
-            class="sync-btn"
-            [disabled]="supabaseSync.isSyncing()"
-            (click)="onSyncClick()"
-            title="Sync offline records with Supabase"
-          >
-            <svg
-              class="sync-icon"
-              [class.spinning]="supabaseSync.isSyncing()"
-              viewBox="0 0 24 24"
-              width="15"
-              height="15"
-              stroke="currentColor"
-              stroke-width="2.2"
-              fill="none"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <polyline points="23 4 23 10 17 10"></polyline>
-              <polyline points="1 20 1 14 7 14"></polyline>
-              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
-            </svg>
-            <span>{{ supabaseSync.isSyncing() ? 'Syncing...' : 'Sync to Cloud' }}</span>
-          </button>
+          <span>{{ isOnline() ? 'Online' : 'Offline — not saving' }}</span>
         </div>
 
         <!-- Change PIN Button -->
@@ -212,12 +176,6 @@ import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
       </div>
     }
 
-    @if (syncNotification()) {
-      <div class="sync-toast" [class.success]="syncNotification()?.success" [class.error]="!syncNotification()?.success">
-        <span>{{ syncNotification()?.message }}</span>
-        <button class="toast-close" (click)="syncNotification.set(null)"><app-icon name="x" [size]="16" /></button>
-      </div>
-    }
   `,
   styles: [`
     .navbar-container {
@@ -344,46 +302,6 @@ import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
       background: #ef4444;
       box-shadow: 0 0 8px #ef4444;
     }
-    .sync-group {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-    }
-    .pending-badge {
-      font-size: 0.75rem;
-      background: #f59e0b;
-      color: var(--av-forest);
-      padding: 3px 8px;
-      border-radius: 6px;
-      font-weight: 600;
-    }
-    .sync-btn {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      padding: 6px 14px;
-      background: var(--av-green-hover);
-      color: white;
-      border: none;
-      border-radius: 8px;
-      font-size: 0.85rem;
-      font-weight: 500;
-      cursor: pointer;
-      transition: background 0.15s ease;
-    }
-    .sync-btn:hover:not(:disabled) {
-      background: var(--av-green-deep);
-    }
-    .sync-btn:disabled {
-      opacity: 0.6;
-      cursor: not-allowed;
-    }
-    .sync-icon.spinning {
-      animation: spin 1s linear infinite;
-    }
-    @keyframes spin {
-      100% { transform: rotate(360deg); }
-    }
     .btn-logout {
       display: flex;
       align-items: center;
@@ -402,41 +320,6 @@ import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
       color: var(--av-red-text);
       border-color: #ef4444;
       background: rgba(239, 68, 68, 0.1);
-    }
-    .sync-toast {
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      padding: 12px 18px;
-      border-radius: 8px;
-      color: white;
-      font-size: 0.88rem;
-      box-shadow: 0 8px 24px rgba(6, 60, 53, 0.14);
-      z-index: 1000;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      max-width: 420px;
-      animation: slideIn 0.2s ease-out;
-    }
-    .sync-toast.success {
-      background: var(--av-green-deep);
-      border: 1px solid var(--av-green);
-    }
-    .sync-toast.error {
-      background: #7f1d1d;
-      border: 1px solid #ef4444;
-    }
-    .toast-close {
-      background: none;
-      border: none;
-      color: white;
-      font-size: 1rem;
-      cursor: pointer;
-    }
-    @keyframes slideIn {
-      from { transform: translateY(20px); opacity: 0; }
-      to { transform: translateY(0); opacity: 1; }
     }
     .btn-pin {
       display: flex;
@@ -648,7 +531,7 @@ import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
     .live-time { font-weight: 700; font-variant-numeric: tabular-nums; }
     .live-client { color: var(--av-text-muted); max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     @keyframes livePulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-    .sync-btn, .btn-pin, .btn-logout { border-radius: 999px; }
+    .btn-pin, .btn-logout { border-radius: 999px; }
   `],
 })
 export class NavbarComponent {
@@ -656,7 +539,8 @@ export class NavbarComponent {
   readonly logoutEvent = output<void>();
 
   activeRole = signal<UserRole>('user');
-  syncNotification = signal<SyncResult | null>(null);
+  /** The app saves straight to the database, so it needs a connection to work. */
+  isOnline = signal<boolean>(typeof navigator !== 'undefined' ? navigator.onLine : true);
 
   // PIN modal state
   showPinModal = signal<boolean>(false);
@@ -669,10 +553,13 @@ export class NavbarComponent {
 
   constructor(
     public authService: AuthService,
-    public supabaseSync: SupabaseSyncService,
     public timerService: TimerService,
     public nav: NavService
   ) {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('online', () => this.isOnline.set(true));
+      window.addEventListener('offline', () => this.isOnline.set(false));
+    }
     // First sign-in with the starting PIN: open "choose your own PIN" and don't let it be skipped
     effect(() => {
       if (this.authService.mustChangePin() && !this.showPinModal()) {
@@ -752,16 +639,6 @@ export class NavbarComponent {
       .slice(0, 2)
       .join('')
       .toUpperCase();
-  }
-
-  async onSyncClick(): Promise<void> {
-    const result = await this.supabaseSync.syncNow();
-    this.syncNotification.set(result);
-    setTimeout(() => {
-      if (this.syncNotification() === result) {
-        this.syncNotification.set(null);
-      }
-    }, 5000);
   }
 
   onLogout(): void {

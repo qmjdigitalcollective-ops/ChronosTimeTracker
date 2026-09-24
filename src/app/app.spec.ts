@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { FormatDurationPipe } from './pipes/format-duration.pipe';
 import { AuthService } from './services/auth.service';
-import { OfflineStorageService } from './services/offline-storage.service';
+import { DataService } from './services/data.service';
 import { Employee, AppSettings } from './models/time-tracker.models';
 
 // Mock localStorage if in node test environment
@@ -38,12 +38,11 @@ const MOCK_EMPLOYEES: Employee[] = [
 
 const MOCK_SETTINGS: AppSettings = {
   screenshotIntervalMinutes: 10,
-  autoSync: false,
   adminPin: 'admin123',
   allowMockScreenshotsIfDenied: true,
 };
 
-class MockOfflineStorageService extends OfflineStorageService {
+class MockDataService extends DataService {
   override async getEmployees(): Promise<Employee[]> {
     return [...MOCK_EMPLOYEES];
   }
@@ -70,8 +69,6 @@ class MockOfflineStorageService extends OfflineStorageService {
   override async saveScreenshot() {}
   override async deleteScreenshot() {}
   override async saveSettings() {}
-  override async getPendingSyncItems() { return { entries: [], screenshots: [] }; }
-  override async markEntriesAsSynced() {}
   override async exportAllData() { return '{}'; }
   override async importData() {}
 }
@@ -80,11 +77,11 @@ class MockOfflineStorageService extends OfflineStorageService {
 
 describe('AuthService', () => {
   let authService: AuthService;
-  let mockStorage: MockOfflineStorageService;
+  let mockStorage: MockDataService;
 
   beforeEach(async () => {
     localStorage.clear();
-    mockStorage = new MockOfflineStorageService();
+    mockStorage = new MockDataService();
     authService = new AuthService(mockStorage);
     await authService.restoreSession();
   });

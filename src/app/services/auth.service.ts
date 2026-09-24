@@ -1,5 +1,5 @@
 import { Injectable, signal } from '@angular/core';
-import { OfflineStorageService } from './offline-storage.service';
+import { DataService } from './data.service';
 import { Employee, UserRole } from '../models/time-tracker.models';
 
 const SESSION_KEY = 'timetracker_auth_session';
@@ -64,7 +64,7 @@ export class AuthService {
     } catch {}
   }
 
-  constructor(private offlineStorage: OfflineStorageService) {
+  constructor(private db: DataService) {
     this.restoreSession();
   }
 
@@ -75,7 +75,7 @@ export class AuthService {
       const raw = localStorage.getItem(SESSION_KEY);
       if (raw) {
         const session: StoredSession = JSON.parse(raw);
-        const employee = await this.offlineStorage.getEmployeeById(session.employeeId);
+        const employee = await this.db.getEmployeeById(session.employeeId);
         if (employee && employee.active) {
           const isAdminUser = session.isAdminMode || employee.role === 'admin';
           this.currentUser.set(employee);
@@ -93,7 +93,7 @@ export class AuthService {
   }
 
   async loginUser(employeeId: string, pin?: string): Promise<{ success: boolean; message: string }> {
-    const employee = await this.offlineStorage.getEmployeeById(employeeId);
+    const employee = await this.db.getEmployeeById(employeeId);
     if (!employee || !employee.active) {
       return { success: false, message: 'Employee not found or inactive.' };
     }
@@ -128,7 +128,7 @@ export class AuthService {
       return { success: false, message: 'Please enter your email or Employee ID.' };
     }
     const typed = username.trim().toLowerCase();
-    const employees = await this.offlineStorage.getEmployees();
+    const employees = await this.db.getEmployees();
     // Team members can sign in with their email or their Employee ID
     const match = employees.find(
       (e) => e.active && (e.id.trim().toLowerCase() === typed || e.email.trim().toLowerCase() === typed)
@@ -140,7 +140,7 @@ export class AuthService {
   }
 
   async loginAdmin(pin: string): Promise<{ success: boolean; message: string }> {
-    const settings = await this.offlineStorage.getSettings();
+    const settings = await this.db.getSettings();
     const targetAdminPin = settings.adminPin || 'admin123';
 
     if (!pin || pin.trim() !== targetAdminPin.trim()) {
@@ -148,7 +148,7 @@ export class AuthService {
     }
 
     // Find the primary admin employee
-    const employees = await this.offlineStorage.getEmployees();
+    const employees = await this.db.getEmployees();
     const adminEmployee = employees.find((e) => e.role === 'admin') || employees[0];
 
     this.currentUser.set(adminEmployee);
@@ -191,7 +191,12 @@ export class AuthService {
       pin: cleanPin,
     };
 
-    await this.offlineStorage.saveEmployee(updatedUser);
+    try {
+      await this.db.saveEmployee(updatedUser);
+    } catch (e) {
+      console.error('PIN change not saved:', e);
+      return { success: false, message: 'Could not save your new PIN. Check your internet connection and try again.' };
+    }
     this.currentUser.set(updatedUser);
     this.mustChangePin.set(false);
     // Remember on this device that the PIN was changed, even if the save above
