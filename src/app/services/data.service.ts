@@ -267,10 +267,23 @@ export class DataService {
     if (error) throw new Error(`Could not ${what}: ${error.message}`);
   }
 
-  private async selectAll(table: string): Promise<Row[]> {
-    const { data, error } = await this.supabase.from(table).select('*');
-    this.check(error, `load ${table}`);
-    return data ?? [];
+  /** Load every row of a table. Supabase returns at most 1000 rows per request, so read it in pages. */
+  private async selectAll(
+    table: string,
+    orderBy = 'id',
+    ascending = true,
+    where: (query: any) => any = (query) => query
+  ): Promise<Row[]> {
+    const PAGE = 1000;
+    const rows: Row[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await where(this.supabase.from(table).select('*'))
+        .order(orderBy, { ascending })
+        .range(from, from + PAGE - 1);
+      this.check(error, `load ${table}`);
+      rows.push(...(data ?? []));
+      if (!data || data.length < PAGE) return rows;
+    }
   }
 
   private async upsert(table: string, rows: Row | Row[]): Promise<void> {
@@ -319,13 +332,14 @@ export class DataService {
 
   // ── Time Entries ──────────────────────────────────────────────────────────
 
-  async getTimeEntries(): Promise<TimeEntry[]> {
-    const { data, error } = await this.supabase
-      .from('time_entries')
-      .select('*')
-      .order('start_time', { ascending: false });
-    this.check(error, 'load time entries');
-    return (data ?? []).map(toTimeEntry);
+  /** Newest first. Narrow it down so the database only sends what the page needs. */
+  async getTimeEntries(filter: { employeeId?: string; since?: number } = {}): Promise<TimeEntry[]> {
+    const rows = await this.selectAll('time_entries', 'start_time', false, (query) => {
+      if (filter.employeeId) query = query.eq('employee_id', filter.employeeId);
+      if (filter.since != null) query = query.gte('start_time', filter.since);
+      return query;
+    });
+    return rows.map(toTimeEntry);
   }
 
   async getActiveTimeEntry(employeeId?: string): Promise<TimeEntry | null> {

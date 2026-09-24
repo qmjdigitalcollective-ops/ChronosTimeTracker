@@ -1,9 +1,10 @@
-import { Component, OnDestroy, OnInit, effect, signal, untracked } from '@angular/core';
+import { Component, OnDestroy, OnInit, computed, effect, signal, untracked } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { AuthService } from '../../services/auth.service';
 import { DataService } from '../../services/data.service';
 import { TimerService } from '../../services/timer.service';
+import { PaginatorComponent, pageSlice } from '../paginator/paginator.component';
 import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
 import { MoneyPipe } from '../../pipes/money.pipe';
 import { billRateFor, payRateFor } from '../../services/rates';
@@ -127,7 +128,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 @Component({
   selector: 'app-admin-dashboard',
   standalone: true,
-  imports: [CommonModule, FormsModule, FormatDurationPipe, MoneyPipe, IconComponent, UserTrackerComponent, PayslipComponent],
+  imports: [CommonModule, FormsModule, FormatDurationPipe, MoneyPipe, IconComponent, UserTrackerComponent, PayslipComponent, PaginatorComponent],
   template: `
     <div class="admin-shell" [class.collapsed]="sidebarCollapsed()">
       <!-- Side menu (grouped, like WebWork). Click an item to open that page. -->
@@ -412,7 +413,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
                 </tr>
               </thead>
               <tbody>
-                @for (day of timesheetDays(); track day.key) {
+                @for (day of pagedTimesheetDays(); track day.key) {
                   @if (day.entries.length === 0) {
                     <tr class="empty-day">
                       <td class="day-cell">{{ day.label }}</td>
@@ -475,6 +476,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
               </tbody>
             </table>
           </div>
+          <app-paginator [total]="timesheetDayList().length" [(page)]="tsPage" [(pageSize)]="tsPageSize" [pageSizeOptions]="[7, 14, 31]" unit="days" />
         </div>
       }
 
@@ -831,7 +833,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
                 </tr>
               </thead>
               <tbody>
-                @for (p of payoutHistory(); track p.id) {
+                @for (p of pagedPayouts(); track p.id) {
                   <tr>
                     <td><input type="date" class="inline-input" [ngModel]="toDateInputMs(p.paidAt)" (change)="updatePayout(p, 'paidAt', $any($event.target).value)" /></td>
                     <td class="font-bold">{{ p.employeeName }}</td>
@@ -854,6 +856,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
               </tbody>
             </table>
           </div>
+          <app-paginator [total]="payouts().length" [(page)]="payoutPage" [(pageSize)]="payoutPageSize" unit="payments" />
         </div>
       }
 
@@ -1165,7 +1168,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
           </div>
 
           <div class="gallery-grid">
-            @for (ss of filteredScreenshots(); track ss.id) {
+            @for (ss of pagedScreenshots(); track ss.id) {
               <div class="gallery-card" (click)="openScreenshotModal(ss)">
                 <div class="gallery-img-wrap">
                   <img [src]="ss.thumbnailDataUrl || ss.imageDataUrl" alt="Snapshot" loading="lazy" />
@@ -1190,6 +1193,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
               </div>
             }
           </div>
+          <app-paginator [total]="filteredScreenshots().length" [(page)]="galleryPage" [(pageSize)]="galleryPageSize" [pageSizeOptions]="[24, 48, 96]" unit="screenshots" />
         </div>
       }
 
@@ -3327,6 +3331,19 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   selectedFilterClient = signal<string>('ALL');
   galleryFilterEmployee = signal<string>('ALL');
 
+  // Paging for long lists (page numbers are 0-based)
+  tsPage = signal<number>(0);
+  tsPageSize = signal<number>(7);
+  galleryPage = signal<number>(0);
+  galleryPageSize = signal<number>(24);
+  payoutPage = signal<number>(0);
+  payoutPageSize = signal<number>(25);
+  /** Cached so the grouping runs once per change, not on every screen refresh */
+  readonly timesheetDayList = computed(() => this.timesheetDays());
+  readonly pagedTimesheetDays = computed(() => pageSlice(this.timesheetDayList(), this.tsPage(), this.tsPageSize()));
+  readonly pagedScreenshots = computed(() => pageSlice(this.filteredScreenshots(), this.galleryPage(), this.galleryPageSize()));
+  readonly pagedPayouts = computed(() => pageSlice(this.payoutHistory(), this.payoutPage(), this.payoutPageSize()));
+
   // Selected dates (defaults to the current pay period; null = open-ended)
   rangePreset = signal<RangePreset>('this-period');
   rangeStart = signal<Date | null>(null);
@@ -3371,6 +3388,19 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
           this.nav.requestedTab.set(null);
         });
       }
+    });
+    // Back to the first page whenever the filters or dates change
+    effect(() => {
+      this.searchQuery();
+      this.selectedFilterEmployee();
+      this.selectedFilterClient();
+      this.rangeStart();
+      this.rangeEnd();
+      untracked(() => this.tsPage.set(0));
+    });
+    effect(() => {
+      this.galleryFilterEmployee();
+      untracked(() => this.galleryPage.set(0));
     });
   }
 

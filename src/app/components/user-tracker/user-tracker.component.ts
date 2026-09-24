@@ -1,4 +1,4 @@
-import { Component, OnInit, effect, signal } from '@angular/core';
+import { Component, OnInit, effect, signal, untracked } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { DataService } from '../../services/data.service';
@@ -10,12 +10,13 @@ import { Client, MemberPermissions, Payout, TimeEntry, TimesheetApproval } from 
 import { DEFAULT_MEMBER_PERMISSIONS, effectivePermissions } from '../../services/permissions';
 import { IconComponent } from '../icon/icon.component';
 import { PayslipComponent } from '../payslip/payslip.component';
+import { PaginatorComponent, pageSlice } from '../paginator/paginator.component';
 import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pay-period';
 
 @Component({
   selector: 'app-user-tracker',
   standalone: true,
-  imports: [CommonModule, FormsModule, FormatDurationPipe, MoneyPipe, IconComponent, PayslipComponent],
+  imports: [CommonModule, FormsModule, FormatDurationPipe, MoneyPipe, IconComponent, PayslipComponent, PaginatorComponent],
   template: `
     <div class="tracker-page" [class.no-money]="!perms().showEarnings" [class.no-pay-panel]="!perms().showPayPanel">
       <!-- Main Tracking Card -->
@@ -314,7 +315,7 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
                 </tr>
               </thead>
               <tbody>
-                @for (entry of myShiftsToday(); track entry.id) {
+                @for (entry of pagedShifts(); track entry.id) {
                   <tr>
                     @if (historyView() !== 'today') {
                       <td class="date-td">{{ formatDay(entry.startTime) }}</td>
@@ -332,6 +333,7 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
               </tbody>
             </table>
           </div>
+          <app-paginator [total]="myShiftsToday().length" [(page)]="shiftPage" [(pageSize)]="shiftPageSize" unit="entries" />
         }
       </div>
 
@@ -1171,6 +1173,8 @@ export class UserTrackerComponent implements OnInit {
   customFrom = signal<string>('');
   customTo = signal<string>('');
   myEntries = signal<TimeEntry[]>([]);
+  shiftPage = signal<number>(0);
+  shiftPageSize = signal<number>(25);
   myPayouts = signal<Payout[]>([]);
   myApprovals = signal<TimesheetApproval[]>([]);
   payslipFor = signal<Payout | null>(null);
@@ -1199,13 +1203,21 @@ export class UserTrackerComponent implements OnInit {
       this.timerService.todayEntries();
       this.loadMyHistory();
     });
+    // Back to the first page when switching Today / Week / Pay period / Custom dates
+    effect(() => {
+      this.historyView();
+      this.weekOffset();
+      this.customFrom();
+      this.customTo();
+      untracked(() => this.shiftPage.set(0));
+    });
   }
 
   async loadMyHistory(): Promise<void> {
     const me = this.authService.currentUser();
     if (!me) return;
     const [entries, payouts, approvals] = await Promise.all([
-      this.db.getTimeEntries(),
+      this.db.getTimeEntries({ employeeId: me.id }),
       this.db.getPayouts(),
       this.db.getApprovals(),
     ]);
@@ -1437,6 +1449,11 @@ export class UserTrackerComponent implements OnInit {
     }
     if (this.historyView() === 'custom') return [];
     return this.timerService.todayEntries().filter((e) => e.employeeId === emp.id);
+  }
+
+  /** The rows on the current page of "My Time". */
+  pagedShifts(): TimeEntry[] {
+    return pageSlice(this.myShiftsToday(), this.shiftPage(), this.shiftPageSize());
   }
 
   calculateUserTodaySeconds(): number {

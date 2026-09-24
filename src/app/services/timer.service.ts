@@ -95,12 +95,9 @@ export class TimerService {
 
   async loadTodayEntries(): Promise<void> {
     try {
-      const entries = await this.db.getTimeEntries();
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
-
-      const today = entries.filter((e) => e.startTime >= todayStart.getTime());
-      this.todayEntries.set(today);
+      this.todayEntries.set(await this.db.getTimeEntries({ since: todayStart.getTime() }));
     } catch (e) {
       console.error('Failed to load today entries:', e);
     }
