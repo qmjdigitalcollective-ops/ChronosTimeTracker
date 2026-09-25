@@ -1,5 +1,5 @@
 import { Injectable } from '@angular/core';
-import { getSupabaseClient } from '../supabase.config';
+import { SUPABASE_ANON_KEY, SUPABASE_URL } from '../supabase.config';
 import {
   Employee,
   Client,
@@ -14,10 +14,20 @@ import {
 } from '../models/time-tracker.models';
 
 // ─────────────────────────────────────────────────────────────────────────────
-// All data lives in Supabase. Every read and write goes straight to the
-// database — nothing is cached on the device, so there is nothing to sync.
+// The app no longer talks to Supabase directly. Every read and write goes
+// through the "gate" Edge Function, which checks a login token (or, only for
+// signing in, a PIN) against the real database using a key that never
+// reaches the browser, and only then performs the operation.
+//
+// Sign-in methods (login/loginAdmin/whoami/logout) live here too, since they
+// use the exact same gate — AuthService just calls into this service and
+// never talks to the network itself.
+//
 // Table columns are snake_case (see supabase_schema.sql).
 // ─────────────────────────────────────────────────────────────────────────────
+
+const GATE_URL = `${SUPABASE_URL}/functions/v1/gate`;
+const TOKEN_KEY = 'timetracker_gate_token';
 
 const DEFAULT_SETTINGS: AppSettings = {
   screenshotIntervalMinutes: 10,
@@ -255,141 +265,212 @@ function fromApproval(a: TimesheetApproval): Row {
   };
 }
 
+export interface LoginResult {
+  employee: Employee;
+  isAdmin: boolean;
+}
+
 @Injectable({ providedIn: 'root' })
 export class DataService {
   /** id of the single app_settings row, once it has been read */
   private settingsId: string | null = null;
 
-  private get supabase() {
-    return getSupabaseClient();
-  }
+  // ── Token (session) storage ────────────────────────────────────────────────
 
-  /** Throw a readable error when Supabase rejects a request. */
-  private check(error: { message: string } | null, what: string): void {
-    if (error) throw new Error(`Could not ${what}: ${error.message}`);
-  }
-
-  /** Load every row of a table. Supabase returns at most 1000 rows per request, so read it in pages. */
-  private async selectAll(
-    table: string,
-    orderBy = 'id',
-    ascending = true,
-    where: (query: any) => any = (query) => query
-  ): Promise<Row[]> {
-    const PAGE = 1000;
-    const rows: Row[] = [];
-    for (let from = 0; ; from += PAGE) {
-      const { data, error } = await where(this.supabase.from(table).select('*'))
-        .order(orderBy, { ascending })
-        .range(from, from + PAGE - 1);
-      this.check(error, `load ${table}`);
-      rows.push(...(data ?? []));
-      if (!data || data.length < PAGE) return rows;
+  getToken(): string | null {
+    try {
+      return localStorage.getItem(TOKEN_KEY);
+    } catch {
+      return null;
     }
   }
 
-  private async upsert(table: string, rows: Row | Row[]): Promise<void> {
-    const { error } = await this.supabase.from(table).upsert(rows);
-    this.check(error, `save to ${table}`);
+  private setToken(token: string | null): void {
+    try {
+      if (token) localStorage.setItem(TOKEN_KEY, token);
+      else localStorage.removeItem(TOKEN_KEY);
+    } catch {}
   }
 
-  private async deleteWhere(table: string, column: string, value: string): Promise<void> {
-    const { error } = await this.supabase.from(table).delete().eq(column, value);
-    this.check(error, `delete from ${table}`);
+  // ── The one call every request goes through ───────────────────────────────
+
+  private async call(body: Record<string, unknown>): Promise<any> {
+    let res: Response;
+    try {
+      res = await fetch(GATE_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${SUPABASE_ANON_KEY}`,
+          apikey: SUPABASE_ANON_KEY,
+        },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      throw new Error('Could not reach the server. Check your internet connection and try again.');
+    }
+    let json: any = null;
+    try {
+      json = await res.json();
+    } catch {
+      /* fall through to the generic error below */
+    }
+    if (!res.ok || json?.error) {
+      throw new Error(json?.error || `Request failed (${res.status})`);
+    }
+    return json;
+  }
+
+  private async select(table: string, filter?: Record<string, unknown>): Promise<Row[]> {
+    const res = await this.call({ op: 'select', token: this.getToken(), table, filter });
+    return res.data ?? [];
+  }
+
+  private async selectOne(table: string, filter: Record<string, unknown>): Promise<Row | null> {
+    const rows = await this.select(table, filter);
+    return rows[0] ?? null;
+  }
+
+  private async upsertRow(table: string, values: Row | Row[], id?: string): Promise<Row[]> {
+    const res = await this.call({ op: 'upsert', token: this.getToken(), table, values, id });
+    return res.data ?? [];
+  }
+
+  private async deleteRow(table: string, id: string, filter?: Record<string, unknown>): Promise<void> {
+    await this.call({ op: 'delete', token: this.getToken(), table, id, filter });
+  }
+
+  // ── Sign in / out ─────────────────────────────────────────────────────────
+  // These are the only calls that don't need an existing token.
+
+  async login(opts: { employeeId?: string; email?: string; pin: string }): Promise<LoginResult> {
+    const res = await this.call({ op: 'login', ...opts });
+    this.setToken(res.token);
+    return { employee: toEmployee(res.employee), isAdmin: !!res.isAdmin };
+  }
+
+  async loginAdmin(pin: string): Promise<LoginResult> {
+    const res = await this.call({ op: 'login_admin', pin });
+    this.setToken(res.token);
+    return { employee: toEmployee(res.employee), isAdmin: !!res.isAdmin };
+  }
+
+  /** Silently restores a session from a stored token, if it's still valid. Never throws. */
+  async whoami(): Promise<LoginResult | null> {
+    const token = this.getToken();
+    if (!token) return null;
+    try {
+      const res = await this.call({ op: 'whoami', token });
+      return { employee: toEmployee(res.employee), isAdmin: !!res.isAdmin };
+    } catch {
+      this.setToken(null);
+      return null;
+    }
+  }
+
+  async logout(): Promise<void> {
+    const token = this.getToken();
+    this.setToken(null);
+    if (token) {
+      try {
+        await this.call({ op: 'logout', token });
+      } catch {
+        /* the token is dropped locally either way */
+      }
+    }
   }
 
   // ── Employees ─────────────────────────────────────────────────────────────
 
   async getEmployees(): Promise<Employee[]> {
-    return (await this.selectAll('employees')).map(toEmployee);
+    return (await this.select('employees')).map(toEmployee);
   }
 
   async getEmployeeById(id: string): Promise<Employee | null> {
-    const { data, error } = await this.supabase.from('employees').select('*').eq('id', id).maybeSingle();
-    this.check(error, 'load employee');
-    return data ? toEmployee(data) : null;
+    const row = await this.selectOne('employees', { id });
+    return row ? toEmployee(row) : null;
   }
 
   async saveEmployee(employee: Employee): Promise<void> {
-    await this.upsert('employees', fromEmployee(employee));
+    await this.upsertRow('employees', fromEmployee(employee), employee.id);
   }
 
   async deleteEmployee(id: string): Promise<void> {
-    await this.deleteWhere('employees', 'id', id);
+    await this.deleteRow('employees', id);
   }
 
   // ── Clients ───────────────────────────────────────────────────────────────
 
   async getClients(): Promise<Client[]> {
-    return (await this.selectAll('clients')).map(toClient);
+    return (await this.select('clients')).map(toClient);
   }
 
   async saveClient(client: Client): Promise<void> {
-    await this.upsert('clients', fromClient(client));
+    await this.upsertRow('clients', fromClient(client), client.id);
   }
 
   async deleteClient(id: string): Promise<void> {
-    await this.deleteWhere('clients', 'id', id);
+    await this.deleteRow('clients', id);
   }
 
   // ── Time Entries ──────────────────────────────────────────────────────────
 
-  /** Newest first. Narrow it down so the database only sends what the page needs. */
+  /** Newest first. Narrow it down so the server only sends what the page needs. */
   async getTimeEntries(filter: { employeeId?: string; since?: number } = {}): Promise<TimeEntry[]> {
-    const rows = await this.selectAll('time_entries', 'start_time', false, (query) => {
-      if (filter.employeeId) query = query.eq('employee_id', filter.employeeId);
-      if (filter.since != null) query = query.gte('start_time', filter.since);
-      return query;
-    });
-    return rows.map(toTimeEntry);
+    const serverFilter: Record<string, unknown> = {};
+    if (filter.employeeId) serverFilter['employee_id'] = filter.employeeId;
+    // "since" is a range, not an equality match — the gate applies equality filters only,
+    // so entries are fetched by employee (or in full, for an admin) and trimmed here.
+    const rows = await this.select('time_entries', serverFilter);
+    let entries = rows.map(toTimeEntry);
+    if (filter.since != null) entries = entries.filter((e) => e.startTime >= filter.since!);
+    return entries.sort((a, b) => b.startTime - a.startTime);
   }
 
   async getActiveTimeEntry(employeeId?: string): Promise<TimeEntry | null> {
-    let query = this.supabase.from('time_entries').select('*').in('status', ['active', 'paused']);
-    if (employeeId) query = query.eq('employee_id', employeeId);
-    const { data, error } = await query.order('start_time', { ascending: false }).limit(1).maybeSingle();
-    this.check(error, 'load running timer');
-    return data ? toTimeEntry(data) : null;
+    const filter: Record<string, unknown> = {};
+    if (employeeId) filter['employee_id'] = employeeId;
+    const rows = (await this.select('time_entries', filter)).filter((r) => r['status'] === 'active' || r['status'] === 'paused');
+    if (!rows.length) return null;
+    rows.sort((a, b) => Number(b['start_time'] ?? 0) - Number(a['start_time'] ?? 0));
+    return toTimeEntry(rows[0]);
   }
 
   async getTimeEntryById(id: string): Promise<TimeEntry | null> {
-    const { data, error } = await this.supabase.from('time_entries').select('*').eq('id', id).maybeSingle();
-    this.check(error, 'load time entry');
-    return data ? toTimeEntry(data) : null;
+    const row = await this.selectOne('time_entries', { id });
+    return row ? toTimeEntry(row) : null;
   }
 
   async saveTimeEntry(entry: TimeEntry): Promise<void> {
-    await this.upsert('time_entries', fromTimeEntry(entry));
+    await this.upsertRow('time_entries', fromTimeEntry(entry), entry.id);
   }
 
   async deleteTimeEntry(id: string): Promise<void> {
-    await this.deleteWhere('screenshots', 'time_entry_id', id);
-    await this.deleteWhere('time_entries', 'id', id);
+    await this.deleteRow('screenshots', '', { time_entry_id: id });
+    await this.deleteRow('time_entries', id);
   }
 
   // ── Contracts (pay & bill rate per member per client) ─────────────────────
 
   async getContracts(): Promise<Contract[]> {
-    return (await this.selectAll('contracts')).map(toContract);
+    return (await this.select('contracts')).map(toContract);
   }
 
   async saveContract(contract: Contract): Promise<void> {
-    await this.upsert('contracts', fromContract(contract));
+    await this.upsertRow('contracts', fromContract(contract), contract.id);
   }
 
   async deleteContract(id: string): Promise<void> {
-    await this.deleteWhere('contracts', 'id', id);
+    await this.deleteRow('contracts', id);
   }
 
   /** True when every table the app needs exists in Supabase. */
   async cloudTablesReady(): Promise<boolean> {
     try {
-      const results = await Promise.all(
-        ['contracts', 'payouts', 'timesheet_approvals', 'team_permissions'].map((t) =>
-          this.supabase.from(t).select('id').limit(1)
-        )
+      await Promise.all(
+        ['contracts', 'payouts', 'timesheet_approvals', 'team_permissions'].map((t) => this.select(t))
       );
-      return results.every((r) => !r.error);
+      return true;
     } catch {
       return false;
     }
@@ -398,78 +479,77 @@ export class DataService {
   // ── Payouts (who was paid for which pay period) ──────────────────────────
 
   async getPayouts(): Promise<Payout[]> {
-    return (await this.selectAll('payouts')).map(toPayout);
+    return (await this.select('payouts')).map(toPayout);
   }
 
   async savePayout(payout: Payout): Promise<void> {
-    await this.upsert('payouts', fromPayout(payout));
+    await this.upsertRow('payouts', fromPayout(payout), payout.id);
   }
 
   async deletePayout(id: string): Promise<void> {
-    await this.deleteWhere('payouts', 'id', id);
+    await this.deleteRow('payouts', id);
   }
 
   // ── Timesheet approvals (submit → approve per pay period) ────────────────
 
   async getApprovals(): Promise<TimesheetApproval[]> {
-    return (await this.selectAll('timesheet_approvals')).map(toApproval);
+    return (await this.select('timesheet_approvals')).map(toApproval);
   }
 
   async saveApproval(approval: TimesheetApproval): Promise<void> {
-    await this.upsert('timesheet_approvals', fromApproval(approval));
+    await this.upsertRow('timesheet_approvals', fromApproval(approval), approval.id);
   }
 
   // ── Team access (what team members can see and do) ──────────────────────
 
   async getPermissions(): Promise<TeamPermissionRow[]> {
-    return (await this.selectAll('team_permissions')).map((r) => ({
+    return (await this.select('team_permissions')).map((r) => ({
       id: String(r['id']),
       permissions: r['permissions'] ?? {},
     }));
   }
 
   async savePermission(row: TeamPermissionRow): Promise<void> {
-    await this.upsert('team_permissions', { id: row.id, permissions: row.permissions });
+    await this.upsertRow('team_permissions', { id: row.id, permissions: row.permissions }, row.id);
   }
 
   async deletePermission(id: string): Promise<void> {
-    await this.deleteWhere('team_permissions', 'id', id);
+    await this.deleteRow('team_permissions', id);
   }
 
   // ── Screenshots ───────────────────────────────────────────────────────────
 
   async getScreenshots(timeEntryId?: string): Promise<ScreenshotRecord[]> {
-    let query = this.supabase.from('screenshots').select('*');
-    if (timeEntryId) query = query.eq('time_entry_id', timeEntryId);
-    const { data, error } = await query.order('timestamp', { ascending: false });
-    this.check(error, 'load screenshots');
-    return (data ?? []).map(toScreenshot);
+    const filter: Record<string, unknown> = {};
+    if (timeEntryId) filter['time_entry_id'] = timeEntryId;
+    const rows = await this.select('screenshots', filter);
+    return rows.map(toScreenshot).sort((a, b) => b.timestamp - a.timestamp);
   }
 
   async saveScreenshot(record: ScreenshotRecord): Promise<void> {
-    await this.upsert('screenshots', fromScreenshot(record));
+    await this.upsertRow('screenshots', fromScreenshot(record), record.id);
   }
 
   async deleteScreenshot(id: string): Promise<void> {
-    await this.deleteWhere('screenshots', 'id', id);
+    await this.deleteRow('screenshots', id);
   }
 
   // ── Settings (a single row in app_settings) ──────────────────────────────
 
   async getSettings(): Promise<AppSettings> {
-    const { data, error } = await this.supabase.from('app_settings').select('*').limit(1).maybeSingle();
-    this.check(error, 'load settings');
-    if (!data) return { ...DEFAULT_SETTINGS };
-    this.settingsId = String(data['id']);
-    return toSettings(data);
+    const row = await this.selectOne('app_settings', {});
+    if (!row) return { ...DEFAULT_SETTINGS };
+    this.settingsId = String(row['id']);
+    return toSettings(row);
   }
 
   async saveSettings(settings: AppSettings): Promise<void> {
     if (!this.settingsId) await this.getSettings();
-    await this.upsert('app_settings', { id: this.settingsId ?? 'appSettings', ...fromSettings(settings) });
+    const id = this.settingsId ?? 'appSettings';
+    await this.upsertRow('app_settings', { id, ...fromSettings(settings) }, id);
   }
 
-  // ── Export / Import ───────────────────────────────────────────────────────
+  // ── Export / Import (admin only) ──────────────────────────────────────────
 
   async exportAllData(): Promise<string> {
     const [employees, clients, timeEntries, screenshots, settings, contracts, payouts] = await Promise.all([
@@ -517,7 +597,7 @@ export class DataService {
       ['screenshots', toArray<ScreenshotRecord>(data.screenshots || data.screenshot_records).map(fromScreenshot)],
     ];
     for (const [table, rows] of batches) {
-      if (rows.length) await this.upsert(table, rows);
+      if (rows.length) await this.upsertRow(table, rows);
     }
 
     if (data.settings) {

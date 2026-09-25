@@ -1,17 +1,9 @@
 import { Injectable, signal } from '@angular/core';
 import { DataService } from './data.service';
-import { Employee, UserRole } from '../models/time-tracker.models';
+import { Employee } from '../models/time-tracker.models';
 
-const SESSION_KEY = 'timetracker_auth_session';
 /** Prefix for a per-device, per-employee flag: "this device already confirmed its own PIN." */
 const PIN_CONFIRMED_PREFIX = 'timetracker_pin_confirmed_';
-
-interface StoredSession {
-  employeeId: string;
-  role: UserRole;
-  isAdminMode: boolean;
-  timestamp: number;
-}
 
 @Injectable({
   providedIn: 'root',
@@ -68,23 +60,14 @@ export class AuthService {
     this.restoreSession();
   }
 
+  /** Silently restores a session from a stored login token, if one is still valid. */
   async restoreSession(): Promise<void> {
     try {
-      if (typeof window === 'undefined') return;
-
-      const raw = localStorage.getItem(SESSION_KEY);
-      if (raw) {
-        const session: StoredSession = JSON.parse(raw);
-        const employee = await this.db.getEmployeeById(session.employeeId);
-        if (employee && employee.active) {
-          const isAdminUser = session.isAdminMode || employee.role === 'admin';
-          this.currentUser.set(employee);
-          this.isLoggedIn.set(true);
-          this.isAdmin.set(isAdminUser);
-          this.mustChangePin.set(this.isStarterPin(employee));
-          this.isInitialized.set(true);
-          return;
-        }
+      const result = await this.db.whoami();
+      if (result) {
+        this.applyLogin(result.employee, result.isAdmin);
+        this.isInitialized.set(true);
+        return;
       }
     } catch (e) {
       console.warn('Could not restore auth session:', e);
@@ -92,83 +75,49 @@ export class AuthService {
     this.isInitialized.set(true);
   }
 
-  async loginUser(employeeId: string, pin?: string): Promise<{ success: boolean; message: string }> {
-    const employee = await this.db.getEmployeeById(employeeId);
-    if (!employee || !employee.active) {
-      return { success: false, message: 'Employee not found or inactive.' };
-    }
-
-    // PIN validation:
-    const employeePin = employee.pin?.trim() ?? '';
-    if (employeePin !== '') {
-      // Not case-sensitive, so "Kyeth23" and "kyeth23" both work
-      if (!pin || pin.trim().toLowerCase() !== employeePin.toLowerCase()) {
-        return { success: false, message: 'Invalid employee PIN code.' };
-      }
-    }
-
-    const isAdminUser = employee.role === 'admin';
+  private applyLogin(employee: Employee, isAdmin: boolean): void {
     this.currentUser.set(employee);
     this.isLoggedIn.set(true);
-    this.isAdmin.set(isAdminUser);
+    this.isAdmin.set(isAdmin);
     this.mustChangePin.set(this.isStarterPin(employee));
+  }
 
-    this.saveSession({
-      employeeId: employee.id,
-      role: employee.role,
-      isAdminMode: isAdminUser,
-      timestamp: Date.now(),
-    });
-
-    return { success: true, message: `Welcome back, ${employee.name}!` };
+  async loginUser(employeeId: string, pin?: string): Promise<{ success: boolean; message: string }> {
+    if (!pin) return { success: false, message: 'Invalid employee PIN code.' };
+    try {
+      const result = await this.db.login({ employeeId, pin });
+      this.applyLogin(result.employee, result.isAdmin);
+      return { success: true, message: `Welcome back, ${result.employee.name}!` };
+    } catch (e) {
+      return { success: false, message: (e as Error).message || 'Invalid employee PIN code.' };
+    }
   }
 
   async loginByUsername(username: string, pin?: string): Promise<{ success: boolean; message: string }> {
     if (!username || !username.trim()) {
       return { success: false, message: 'Please enter your email or Employee ID.' };
     }
-    const typed = username.trim().toLowerCase();
-    const employees = await this.db.getEmployees();
-    // Team members can sign in with their email or their Employee ID
-    const match = employees.find(
-      (e) => e.active && (e.id.trim().toLowerCase() === typed || e.email.trim().toLowerCase() === typed)
-    );
-    if (!match) {
-      return { success: false, message: 'Email or Employee ID not found. Please check and try again.' };
+    if (!pin) return { success: false, message: 'Email or Employee ID not found. Please check and try again.' };
+    try {
+      const typed = username.trim();
+      const result = typed.includes('@')
+        ? await this.db.login({ email: typed, pin })
+        : await this.db.login({ employeeId: typed, pin });
+      this.applyLogin(result.employee, result.isAdmin);
+      return { success: true, message: `Welcome back, ${result.employee.name}!` };
+    } catch (e) {
+      return { success: false, message: (e as Error).message || 'Email or Employee ID not found. Please check and try again.' };
     }
-    return this.loginUser(match.id, pin);
   }
 
   async loginAdmin(pin: string): Promise<{ success: boolean; message: string }> {
-    const settings = await this.db.getSettings();
-    const targetAdminPin = settings.adminPin?.trim();
-
-    // No silent fallback to a guessable default PIN. If nobody has set a real
-    // Admin PIN yet, refuse instead of quietly accepting a well-known value.
-    if (!targetAdminPin) {
-      return { success: false, message: 'Admin PIN has not been set up yet. Set one in Settings first.' };
+    try {
+      const result = await this.db.loginAdmin(pin);
+      this.applyLogin(result.employee, true);
+      return { success: true, message: 'Admin authenticated successfully!' };
+    } catch (e) {
+      return { success: false, message: (e as Error).message || 'Incorrect Admin PIN. Access denied.' };
     }
-
-    if (!pin || pin.trim() !== targetAdminPin) {
-      return { success: false, message: 'Incorrect Admin PIN. Access denied.' };
-    }
-
-    // Find the primary admin employee
-    const employees = await this.db.getEmployees();
-    const adminEmployee = employees.find((e) => e.role === 'admin') || employees[0];
-
-    this.currentUser.set(adminEmployee);
-    this.isLoggedIn.set(true);
-    this.isAdmin.set(true);
-
-    this.saveSession({
-      employeeId: adminEmployee.id,
-      role: 'admin',
-      isAdminMode: true,
-      timestamp: Date.now(),
-    });
-
-    return { success: true, message: 'Admin authenticated successfully!' };
   }
 
   async changeCurrentUserPin(newPin: string, currentPin?: string): Promise<{ success: boolean; message: string }> {
@@ -198,6 +147,8 @@ export class AuthService {
     };
 
     try {
+      // The server only ever accepts the "pin" field from a non-admin editing
+      // their own record — every other field is ignored, no matter what is sent.
       await this.db.saveEmployee(updatedUser);
     } catch (e) {
       console.error('PIN change not saved:', e);
@@ -212,19 +163,14 @@ export class AuthService {
     return { success: true, message: 'PIN updated successfully!' };
   }
 
+  /** Clears the session immediately; telling the server happens in the background. */
   logout(): void {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem(SESSION_KEY);
-    }
     this.currentUser.set(null);
     this.isLoggedIn.set(false);
     this.isAdmin.set(false);
     this.mustChangePin.set(false);
-  }
-
-  private saveSession(session: StoredSession): void {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    }
+    this.db.logout().catch(() => {
+      /* the local session is already gone either way */
+    });
   }
 }
