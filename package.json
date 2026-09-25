@@ -9,9 +9,10 @@
     "watch": "ng build --watch --configuration development",
     "test": "ng test",
     "electron": "electron .",
-    "desktop": "npm run build && electron .",
-    "dist:mac": "npm run build && electron-builder --mac",
-    "dist:win": "npm run build && electron-builder --win"
+    "build:desktop": "ng build --base-href ./ --output-path dist/desktop",
+    "desktop": "npm run build:desktop && electron .",
+    "dist:mac": "npm run build:desktop && electron-builder --mac",
+    "dist:win": "npm run build:desktop && electron-builder --win"
   },
   "private": true,
   "packageManager": "npm@11.17.0",
@@ -42,7 +43,7 @@
     "productName": "Auravia Time Tracker",
     "files": [
       "electron/**/*",
-      "dist/time-tracker/**/*"
+      "dist/desktop/**/*"
     ],
     "mac": {
       "icon": "public/icon-512.png",

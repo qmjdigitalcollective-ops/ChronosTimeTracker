@@ -41,9 +41,12 @@ function createWindow() {
     },
   });
 
-  // Load production build or dev server
-  const distIndex = path.join(__dirname, '..', 'dist', 'time-tracker', 'browser', 'index.html');
-  const distIndexRoot = path.join(__dirname, '..', 'dist', 'time-tracker', 'index.html');
+  // Load production build or dev server. The desktop build uses a relative
+  // base href (--base-href ./) — the regular web build's absolute "/" base
+  // href resolves against the filesystem root under file://, which is what
+  // produced a blank window with every asset silently failing to load.
+  const distIndex = path.join(__dirname, '..', 'dist', 'desktop', 'browser', 'index.html');
+  const distIndexRoot = path.join(__dirname, '..', 'dist', 'desktop', 'index.html');
 
   if (fs.existsSync(distIndex)) {
     mainWindow.loadFile(distIndex);
