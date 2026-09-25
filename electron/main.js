@@ -1,8 +1,29 @@
-const { app, BrowserWindow, ipcMain, desktopCapturer } = require('electron');
+const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
 let mainWindow = null;
+
+// Auto-pause the timer after this many seconds with no mouse/keyboard activity
+// anywhere on the computer (not just in this window) — a real "stepped away
+// from the desk" signal, which a browser tab alone could never detect.
+const IDLE_THRESHOLD_SECONDS = 120;
+let wasIdle = false;
+
+function startIdleWatcher() {
+  setInterval(() => {
+    if (!mainWindow) return;
+    const idleSeconds = powerMonitor.getSystemIdleTime();
+    const isIdleNow = idleSeconds >= IDLE_THRESHOLD_SECONDS;
+    if (isIdleNow && !wasIdle) {
+      wasIdle = true;
+      mainWindow.webContents.send('idle-started');
+    } else if (!isIdleNow && wasIdle) {
+      wasIdle = false;
+      mainWindow.webContents.send('idle-ended', { idleSeconds });
+    }
+  }, 5000);
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -59,6 +80,7 @@ ipcMain.handle('capture-screen', async () => {
 
 app.whenReady().then(() => {
   createWindow();
+  startIdleWatcher();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

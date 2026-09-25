@@ -23,6 +23,11 @@ export class TimerService {
   readonly currentSessionScreenshots = signal<ScreenshotRecord[]>([]);
   readonly todayEntries = signal<TimeEntry[]>([]);
   readonly isTakingScreenshot = signal<boolean>(false);
+  /** True when the current pause was triggered automatically by 2 minutes of
+   * no mouse/keyboard activity on the computer, not a manual "Pause Shift"
+   * click — so the UI can explain why the timer stopped. Desktop app only;
+   * a browser tab has no way to see activity outside itself. */
+  readonly pausedForIdle = signal<boolean>(false);
 
   private tickerIntervalId: any = null;
   /** Team Access → "Screenshots" for the person whose timer is running */
@@ -36,6 +41,27 @@ export class TimerService {
     // The running timer is restored per signed-in person (see restoreActiveSession),
     // so one person never picks up someone else's timer.
     this.loadTodayEntries();
+    this.watchIdle();
+  }
+
+  /** Auto-pause after 2 minutes away from the keyboard/mouse (desktop app only). */
+  private watchIdle(): void {
+    const api = (window as any).electronAPI;
+    if (!api?.isElectron) return;
+
+    api.onIdleStarted(() => {
+      if (this.status() === 'active') {
+        this.pausedForIdle.set(true);
+        this.pause();
+      }
+    });
+
+    api.onIdleEnded(() => {
+      // Coming back doesn't auto-resume the clock — the person still has to
+      // press Resume themselves, same as a manual pause, so idle time never
+      // gets counted just because they walked back to their desk.
+      this.pausedForIdle.set(false);
+    });
   }
 
   /** Restore the signed-in person's own running/paused timer (if any). */
@@ -49,6 +75,7 @@ export class TimerService {
     this.status.set('completed');
     this.elapsedSeconds.set(0);
     this.pausedSeconds.set(0);
+    this.pausedForIdle.set(false);
     this.currentSessionScreenshots.set([]);
 
     try {
@@ -219,6 +246,7 @@ export class TimerService {
     await this.db.saveTimeEntry(entry);
     this.activeEntry.set(entry);
     this.status.set('active');
+    this.pausedForIdle.set(false);
 
     this.startTicker();
   }
@@ -258,6 +286,7 @@ export class TimerService {
     this.status.set('completed');
     this.elapsedSeconds.set(0);
     this.pausedSeconds.set(0);
+    this.pausedForIdle.set(false);
     this.currentSessionScreenshots.set([]);
 
     await this.loadTodayEntries();

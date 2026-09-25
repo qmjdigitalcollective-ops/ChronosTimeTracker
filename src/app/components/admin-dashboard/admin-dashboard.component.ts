@@ -3546,6 +3546,14 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     return this.rangeEntries().reduce((acc, e) => acc + (e.screenshotCount || 0), 0);
   }
 
+  /** The owner's own hours are personal earnings, not a payroll cost to the
+   * business — so "Team Pay" (what you owe the team) and the pay-period
+   * payout list leave them out entirely. Client billing is untouched: what a
+   * client is charged doesn't change based on who logged the hours. */
+  private isOwnerEntry(e: TimeEntry): boolean {
+    return this.employees().find((emp) => emp.id === e.employeeId)?.role === 'admin';
+  }
+
   private payPeriodFor(date: Date): [Date, Date] {
     const y = date.getFullYear();
     const m = date.getMonth();
@@ -3574,7 +3582,9 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   }
 
   totalPayrollExpense(): number {
-    return this.rangeEntries().reduce((acc, curr) => acc + (curr.totalPay || 0), 0);
+    return this.rangeEntries()
+      .filter((e) => !this.isOwnerEntry(e))
+      .reduce((acc, curr) => acc + (curr.totalPay || 0), 0);
   }
 
   /** Bill rate for an entry: the member's contract on that project, else the project's default rate. */
@@ -3953,7 +3963,9 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   // --- Team Pay & payouts ---
 
   payRows(): PayRow[] {
-    return this.employeeReports().map((rep) => {
+    return this.employeeReports()
+      .filter((rep) => this.employees().find((emp) => emp.id === rep.employeeId)?.role !== 'admin')
+      .map((rep) => {
       const projects = [
         ...new Set(this.rangeEntries().filter((e) => e.employeeId === rep.employeeId).map((e) => this.clientName(e.clientId) || e.clientName)),
       ];
