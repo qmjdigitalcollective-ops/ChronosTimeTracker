@@ -4890,6 +4890,16 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       const empIds = new Set(this.employees().map((e) => e.id));
       const dataRows = empIds.has(rows[0][0]?.trim()) ? rows : rows.slice(1);
 
+      // A row is a duplicate of an existing entry when the same person clocked
+      // the same client at the same start time for the same duration — that
+      // combination can't happen twice for real, so re-importing the same
+      // export (or overlapping date ranges) won't double-count hours or pay.
+      const signature = (employeeId: string, clientId: string, startTime: number, durationSeconds: number) =>
+        `${employeeId}|${clientId}|${startTime}|${durationSeconds}`;
+      const existingSignatures = new Set(
+        this.entries().map((e) => signature(e.employeeId, e.clientId, e.startTime, e.durationSeconds))
+      );
+
       const errors: string[] = [];
       let added = 0;
       for (let i = 0; i < dataRows.length; i++) {
@@ -4923,6 +4933,12 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
           errors.push(`Row ${line}: more than 16 hours — check start and end.`);
           continue;
         }
+        const sig = signature(emp.id, cli.id, startTime, durationSeconds);
+        if (existingSignatures.has(sig)) {
+          errors.push(`Row ${line}: skipped — duplicate of an existing entry (same person, client, date and time).`);
+          continue;
+        }
+        existingSignatures.add(sig);
         const hourlyRate = payRateFor(this.contracts(), emp, cli.id);
         const entry: TimeEntry = {
           id: `${MANUAL_ENTRY_PREFIX}csv_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`,
