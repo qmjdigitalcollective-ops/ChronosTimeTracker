@@ -143,3 +143,25 @@ export interface TeamPermissionRow {
   id: string;
   permissions: MemberPermissions;
 }
+
+export type PauseReason = 'break' | 'meeting' | 'technical' | 'away' | 'idle' | 'other';
+
+/** Paid pauses still count as work time; unpaid ones are taken off the entry's duration. */
+export const PAUSE_REASONS: { key: PauseReason; label: string; paid: boolean }[] = [
+  { key: 'break', label: 'Break', paid: false },
+  { key: 'meeting', label: 'Meeting / call', paid: true },
+  { key: 'technical', label: 'Technical problem', paid: true },
+  { key: 'away', label: 'Away', paid: false },
+  { key: 'idle', label: 'Idle (automatic)', paid: false },
+  { key: 'other', label: 'Other', paid: false },
+];
+
+export interface TimePause {
+  id: string;
+  timeEntryId: string;
+  employeeId: string;
+  reason: PauseReason;
+  paid: boolean;
+  startedAt: number;
+  endedAt?: number;
+}

@@ -6,7 +6,7 @@ import { TimerService } from '../../services/timer.service';
 import { AuthService } from '../../services/auth.service';
 import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
 import { MoneyPipe } from '../../pipes/money.pipe';
-import { Client, MemberPermissions, Payout, TimeEntry, TimesheetApproval } from '../../models/time-tracker.models';
+import { PAUSE_REASONS, PauseReason, Client, MemberPermissions, Payout, TimeEntry, TimesheetApproval } from '../../models/time-tracker.models';
 import { DEFAULT_MEMBER_PERMISSIONS, effectivePermissions } from '../../services/permissions';
 import { IconComponent } from '../icon/icon.component';
 import { PayslipComponent } from '../payslip/payslip.component';
@@ -120,6 +120,9 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
                   • Paused: {{ timerService.pausedSeconds() | formatDuration }}
                 </span>
               }
+              @if (timerService.currentPause(); as cp) {
+                <span class="paused-text">• On pause: {{ pauseLabel(cp.reason) }}</span>
+              }
               @if (timerService.pausedForIdle()) {
                 <span class="paused-text">• Paused automatically — no activity for a few minutes. Press Resume when you're back</span>
               }
@@ -143,10 +146,24 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
               <span>Start Tracking</span>
             </button>
           } @else if (timerService.status() === 'active') {
+            <div class="pause-wrap">
+              @if (pauseMenuOpen()) {
+                <div class="pause-menu" role="menu">
+                  <div class="pause-menu-title">Why are you pausing?</div>
+                  @for (r of pauseReasons; track r.key) {
+                    @if (r.key !== 'idle') {
+                      <button type="button" class="pause-option" (click)="pauseFor(r.key)">
+                        {{ r.label }}
+                        <span class="pause-paid">{{ r.paid ? 'paid' : 'unpaid' }}</span>
+                      </button>
+                    }
+                  }
+                </div>
+              }
             <button
               type="button"
               class="btn btn-pause"
-              (click)="timerService.pause()"
+              (click)="pauseMenuOpen.set(!pauseMenuOpen())"
             >
               <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.5" fill="none">
                 <rect x="6" y="4" width="4" height="16"></rect>
@@ -154,6 +171,7 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
               </svg>
               <span>Pause Shift</span>
             </button>
+            </div>
 
             <button
               type="button"
@@ -666,6 +684,19 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
       background: linear-gradient(135deg, var(--av-green-hover), var(--av-green-deep));
       transform: translateY(-1px);
     }
+    .pause-wrap { position: relative; display: inline-block; }
+    .pause-menu {
+      position: absolute; bottom: calc(100% + 8px); left: 0; z-index: 20; min-width: 230px;
+      background: #fff; border: 1px solid #e3dac8; border-radius: 12px; padding: 8px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.15); text-align: left;
+    }
+    .pause-menu-title { font-size: 12px; font-weight: 600; color: #66756a; padding: 4px 8px 6px; }
+    .pause-option {
+      display: flex; justify-content: space-between; width: 100%; background: none; border: 0;
+      padding: 9px 10px; border-radius: 8px; cursor: pointer; font-size: 14px; color: #1c2620;
+    }
+    .pause-option:hover { background: #f1ece0; }
+    .pause-paid { font-size: 11px; color: #66756a; }
     .btn-pause {
       background: linear-gradient(135deg, #f59e0b, #d97706);
       color: white;
@@ -1158,6 +1189,18 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
   `],
 })
 export class UserTrackerComponent implements OnInit {
+  readonly pauseReasons = PAUSE_REASONS;
+  readonly pauseMenuOpen = signal(false);
+
+  pauseLabel(reason: PauseReason): string {
+    return PAUSE_REASONS.find((r) => r.key === reason)?.label ?? reason;
+  }
+
+  pauseFor(reason: PauseReason): void {
+    this.pauseMenuOpen.set(false);
+    this.timerService.pause(reason);
+  }
+
   clients = signal<Client[]>([]);
   selectedClientId = signal<string>('');
   taskDescription = signal<string>('');

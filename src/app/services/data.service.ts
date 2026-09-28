@@ -10,8 +10,7 @@ import {
   Contract,
   Payout,
   TimesheetApproval,
-  TeamPermissionRow,
-} from '../models/time-tracker.models';
+  TeamPermissionRow, TimePause, PauseReason } from '../models/time-tracker.models';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The app no longer talks to Supabase directly. Every read and write goes
@@ -132,6 +131,30 @@ function fromTimeEntry(e: TimeEntry): Row {
     total_pay: e.totalPay,
     screenshot_count: e.screenshotCount,
     last_pause_time: e.lastPauseTime ?? null,
+  };
+}
+
+function toPause(r: Row): TimePause {
+  return {
+    id: String(r['id']),
+    timeEntryId: String(r['time_entry_id'] ?? ''),
+    employeeId: String(r['employee_id'] ?? ''),
+    reason: String(r['reason'] ?? 'other') as PauseReason,
+    paid: !!r['paid'],
+    startedAt: Number(r['started_at'] ?? 0),
+    endedAt: r['ended_at'] == null ? undefined : Number(r['ended_at']),
+  };
+}
+
+function fromPause(p: TimePause): Row {
+  return {
+    id: p.id,
+    time_entry_id: p.timeEntryId,
+    employee_id: p.employeeId,
+    reason: p.reason,
+    paid: p.paid,
+    started_at: p.startedAt,
+    ended_at: p.endedAt ?? null,
   };
 }
 
@@ -515,6 +538,17 @@ export class DataService {
 
   async deletePermission(id: string): Promise<void> {
     await this.deleteRow('team_permissions', id);
+  }
+
+  // ── Pauses (why a timer was paused) ───────────────────────────────────────
+
+  async getPauses(timeEntryId?: string): Promise<TimePause[]> {
+    const rows = await this.select('time_pauses', timeEntryId ? { time_entry_id: timeEntryId } : undefined);
+    return rows.map(toPause).sort((a, b) => a.startedAt - b.startedAt);
+  }
+
+  async savePause(pause: TimePause): Promise<void> {
+    await this.upsertRow('time_pauses', fromPause(pause), pause.id);
   }
 
   // ── Screenshots ───────────────────────────────────────────────────────────

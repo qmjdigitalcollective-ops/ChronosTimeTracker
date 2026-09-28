@@ -9,6 +9,9 @@ import {
   TimeEntry,
   ScreenshotRecord,
   EntryStatus,
+  PauseReason,
+  PAUSE_REASONS,
+  TimePause,
 } from '../models/time-tracker.models';
 
 @Injectable({
@@ -28,6 +31,9 @@ export class TimerService {
    * click — so the UI can explain why the timer stopped. Desktop app only;
    * a browser tab has no way to see activity outside itself. */
   readonly pausedForIdle = signal<boolean>(false);
+
+  /** The pause currently in progress (why the timer is stopped) */
+  readonly currentPause = signal<TimePause | null>(null);
 
   private tickerIntervalId: any = null;
   /** Team Access → "Screenshots" for the person whose timer is running */
@@ -55,7 +61,7 @@ export class TimerService {
     api.onIdleStarted(() => {
       if (this.status() === 'active') {
         this.pausedForIdle.set(true);
-        this.pause();
+        this.pause('idle');
       }
     });
 
@@ -85,7 +91,7 @@ export class TimerService {
     const goIdle = (awaySeconds: number) => {
       if (this.status() !== 'active') return;
       this.pausedForIdle.set(true);
-      this.pause(awaySeconds);
+      this.pause('idle', awaySeconds);
       this.notifyIdle();
     };
 
@@ -149,6 +155,7 @@ export class TimerService {
     this.elapsedSeconds.set(0);
     this.pausedSeconds.set(0);
     this.pausedForIdle.set(false);
+    this.currentPause.set(null);
     this.currentSessionScreenshots.set([]);
 
     try {
@@ -175,10 +182,9 @@ export class TimerService {
           this.startTicker();
         } else if (active.status === 'paused' && active.lastPauseTime) {
           // Add extra paused time while page was away
-          const additionalPaused = Math.max(0, Math.floor((now - active.lastPauseTime) / 1000));
-          paused += additionalPaused;
-          active.pausedSeconds = paused;
-          await this.db.saveTimeEntry(active);
+          // Display only — resume() adds the full paused stretch once; saving it here as well
+          // counted the same pause twice.
+          paused += Math.max(0, Math.floor((now - active.lastPauseTime) / 1000));
         }
 
         this.elapsedSeconds.set(totalElapsed);
@@ -310,7 +316,7 @@ export class TimerService {
   }
 
   /** `awaySeconds`: how long the person was already idle — that stretch isn't counted as work. */
-  async pause(awaySeconds = 0): Promise<void> {
+  async pause(reason: PauseReason = 'other', awaySeconds = 0): Promise<void> {
     const entry = this.activeEntry();
     if (!entry || this.status() !== 'active') return;
 
@@ -322,7 +328,18 @@ export class TimerService {
     entry.durationSeconds = Math.max(0, this.wallElapsedSeconds() - awaySeconds);
     entry.totalPay = (entry.durationSeconds / 3600) * entry.hourlyRate;
 
+    const pause: TimePause = {
+      id: 'pause_' + now + '_' + Math.random().toString(36).substring(2, 6),
+      timeEntryId: entry.id,
+      employeeId: entry.employeeId,
+      reason,
+      paid: PAUSE_REASONS.find((r) => r.key === reason)?.paid ?? false,
+      startedAt: now,
+    };
+    this.currentPause.set(pause);
+
     await this.db.saveTimeEntry(entry);
+    this.db.savePause(pause).catch(() => {});
     this.activeEntry.set(entry);
     this.status.set('paused');
   }
@@ -332,7 +349,18 @@ export class TimerService {
     if (!entry || this.status() !== 'paused') return;
 
     const now = Date.now();
-    if (entry.lastPauseTime) {
+    let pause = this.currentPause();
+    if (!pause) {
+      const open = (await this.db.getPauses(entry.id).catch(() => [] as TimePause[])).filter((p) => !p.endedAt);
+      pause = open[open.length - 1] ?? null;
+    }
+    if (pause) {
+      pause.endedAt = now;
+      this.db.savePause(pause).catch(() => {});
+      this.currentPause.set(null);
+    }
+    // Paid pauses (meetings, technical problems) still count as work
+    if (entry.lastPauseTime && !(pause?.paid)) {
       const addedPaused = Math.max(0, Math.floor((now - entry.lastPauseTime) / 1000));
       entry.pausedSeconds = (entry.pausedSeconds || 0) + addedPaused;
       this.pausedSeconds.set(entry.pausedSeconds);
@@ -357,7 +385,15 @@ export class TimerService {
     const before = { ...entry };
 
     // Finalize duration and earnings
-    const finalDuration = this.wallElapsedSeconds();
+    // Clocking out while paused: the paused stretch isn't work, so use the time frozen at the pause
+    const wasPaused = entry.status === 'paused';
+    const finalDuration = wasPaused ? entry.durationSeconds : this.wallElapsedSeconds();
+    const openPause = this.currentPause();
+    if (wasPaused && openPause) {
+      openPause.endedAt = now;
+      this.db.savePause(openPause).catch(() => {});
+      this.currentPause.set(null);
+    }
     entry.durationSeconds = finalDuration;
     entry.endTime = now;
     entry.status = 'completed';

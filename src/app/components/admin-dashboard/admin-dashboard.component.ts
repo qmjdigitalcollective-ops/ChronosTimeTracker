@@ -24,6 +24,8 @@ import {
   MANUAL_ENTRY_PREFIX,
   MemberPermissions,
   TeamPermissionRow,
+  TimePause,
+  PAUSE_REASONS,
 } from '../../models/time-tracker.models';
 import { DEFAULT_MEMBER_PERMISSIONS, PERMISSION_LABELS, effectivePermissions } from '../../services/permissions';
 import { IconComponent } from '../icon/icon.component';
@@ -435,6 +437,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
                           <span class="manual-tag" title="Added by hand, not by the timer">Manual</span>
                         }
                         <div class="time-sub">{{ formatTime(entry.startTime) }} – {{ entry.endTime ? formatTime(entry.endTime) : 'now' }}</div>
+                        @if (pauseSummary(entry.id); as ps) { <div class="time-sub" [title]="ps.detail">⏸ {{ ps.text }}</div> }
                       </td>
                       @if (tsColumns().member) { <td class="font-bold">{{ entry.employeeName }}</td> }
                       @if (tsColumns().project) { <td><span class="client-badge">{{ entry.clientName }}</span></td> }
@@ -3322,6 +3325,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   clients = signal<Client[]>([]);
   entries = signal<TimeEntry[]>([]);
   screenshots = signal<ScreenshotRecord[]>([]);
+  pauses = signal<TimePause[]>([]);
   settings = signal<AppSettings | null>(null);
   selectedScreenshot = signal<ScreenshotRecord | null>(null);
 
@@ -3447,6 +3451,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     this.entries.set(ents);
     this.screenshots.set(sss);
     this.settings.set(sets);
+    this.pauses.set(await this.db.getPauses().catch(() => []));
   }
 
   // --- Pay Period / Date Range ---
@@ -3560,6 +3565,27 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     return date.getDate() <= 15
       ? [new Date(y, m, 1), new Date(y, m, 15)]
       : [new Date(y, m, 16), new Date(y, m + 1, 0)];
+  }
+
+  /** e.g. "2h 1m paused: Break 1h 30m, Meeting 31m" for the timesheet row */
+  pauseSummary(entryId: string): { text: string; detail: string } | null {
+    const list = this.pauses().filter((p) => p.timeEntryId === entryId);
+    if (!list.length) return null;
+    const fmt = (sec: number) => {
+      const h = Math.floor(sec / 3600);
+      const m = Math.round((sec % 3600) / 60);
+      return h ? `${h}h ${m}m` : `${m}m`;
+    };
+    const byReason = new Map<string, number>();
+    let total = 0;
+    for (const p of list) {
+      const sec = Math.max(0, Math.floor(((p.endedAt ?? Date.now()) - p.startedAt) / 1000));
+      total += sec;
+      const label = PAUSE_REASONS.find((r) => r.key === p.reason)?.label ?? p.reason;
+      byReason.set(label, (byReason.get(label) ?? 0) + sec);
+    }
+    const detail = [...byReason].map(([l, s]) => `${l} ${fmt(s)}`).join(', ');
+    return { text: `${fmt(total)} paused`, detail };
   }
 
   private parseDateInput(value: string): Date | null {
