@@ -203,7 +203,21 @@ export class TimerService {
     }
   }
 
+  private startingNow = false;
+
   async clockIn(employee: Employee, client: Client, taskDescription: string): Promise<boolean> {
+    // Clock-in takes a moment; a second click during that wait used to start a
+    // second timer (two overlapping entries, double-counted).
+    if (this.startingNow) return false;
+    this.startingNow = true;
+    try {
+      return await this.clockInNow(employee, client, taskDescription);
+    } finally {
+      this.startingNow = false;
+    }
+  }
+
+  private async clockInNow(employee: Employee, client: Client, taskDescription: string): Promise<boolean> {
     if (this.activeEntry()) {
       console.warn('A session is already active');
       return false;
