@@ -138,7 +138,14 @@ export class TimerService {
 
     // Also check the database, not just this tab's memory — catches an active
     // timer started from another device or tab before this one loaded it.
-    const existing = await this.db.getActiveTimeEntry(employee.id);
+    // These reads don't depend on each other, so fetch them together (one
+    // round trip instead of four back to back — clock-in felt slow otherwise).
+    const [existing, contracts, settings, permissions] = await Promise.all([
+      this.db.getActiveTimeEntry(employee.id),
+      this.db.getContracts(),
+      this.db.getSettings(),
+      this.db.getPermissions(),
+    ]);
     if (existing) {
       console.warn('An active session already exists for this person on another device/tab');
       await this.restoreActiveSession(employee.id);
@@ -146,7 +153,6 @@ export class TimerService {
     }
 
     // Pay rate for this member on this client (Contracts), else their default rate
-    const contracts = await this.db.getContracts();
     const hourlyRate = payRateFor(contracts, employee, client.id);
 
     // A contract's weekly hour limit is a hard stop, not just a warning on the
@@ -167,12 +173,12 @@ export class TimerService {
 
     const cleanTask = taskDescription.trim() || 'General work';
 
-    // Request screen permission on clock-in
-    await this.screenshotService.requestScreenPermission();
-
-    const settings = await this.db.getSettings();
     this.intervalMinutes = settings.screenshotIntervalMinutes || 10;
-    this.screenshotsAllowed = effectivePermissions(await this.db.getPermissions(), employee).screenshots;
+    this.screenshotsAllowed = effectivePermissions(permissions, employee).screenshots;
+
+    // Only ask for screen access when this person's screenshots are on —
+    // otherwise the OS shows a screen-recording prompt for nothing.
+    if (this.screenshotsAllowed) await this.screenshotService.requestScreenPermission();
 
     const now = Date.now();
     const entryId = 'entry_' + now + '_' + Math.random().toString(36).substring(2, 7);
