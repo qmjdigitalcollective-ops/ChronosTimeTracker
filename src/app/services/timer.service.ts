@@ -228,7 +228,7 @@ export class TimerService {
 
     entry.status = 'paused';
     entry.lastPauseTime = now;
-    entry.durationSeconds = this.elapsedSeconds();
+    entry.durationSeconds = this.wallElapsedSeconds();
     entry.totalPay = (entry.durationSeconds / 3600) * entry.hourlyRate;
 
     await this.db.saveTimeEntry(entry);
@@ -266,7 +266,7 @@ export class TimerService {
     const before = { ...entry };
 
     // Finalize duration and earnings
-    const finalDuration = this.elapsedSeconds();
+    const finalDuration = this.wallElapsedSeconds();
     entry.durationSeconds = finalDuration;
     entry.endTime = now;
     entry.status = 'completed';
@@ -357,15 +357,29 @@ export class TimerService {
     this.nextScreenshotSeconds.set(this.intervalMinutes * 60);
   }
 
+  private lastPersistedSeconds = 0;
+
+  /** Seconds worked so far: wall-clock time since start, minus time spent paused. */
+  private wallElapsedSeconds(): number {
+    const entry = this.activeEntry();
+    if (!entry) return this.elapsedSeconds();
+    const wall = Math.floor((Date.now() - entry.startTime) / 1000) - (entry.pausedSeconds || 0);
+    return Math.max(0, wall);
+  }
+
   private startTicker(): void {
     this.stopTicker();
+    this.lastPersistedSeconds = this.elapsedSeconds();
     this.tickerIntervalId = setInterval(async () => {
       if (this.status() === 'active') {
-        const nextElapsed = this.elapsedSeconds() + 1;
+        // Real clock, not "+1 per tick": browsers throttle or freeze timers in
+        // background tabs and during sleep, which made long sessions come up short.
+        const nextElapsed = this.wallElapsedSeconds();
         this.elapsedSeconds.set(nextElapsed);
 
-        // Every 30 seconds persist current duration
-        if (nextElapsed % 30 === 0 && this.activeEntry()) {
+        // Persist the current duration about every 30 seconds
+        if (nextElapsed - this.lastPersistedSeconds >= 30 && this.activeEntry()) {
+          this.lastPersistedSeconds = nextElapsed;
           const entry = this.activeEntry()!;
           entry.durationSeconds = nextElapsed;
           entry.totalPay = (nextElapsed / 3600) * entry.hourlyRate;
