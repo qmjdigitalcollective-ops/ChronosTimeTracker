@@ -47,7 +47,10 @@ export class TimerService {
   /** Auto-pause after 2 minutes away from the keyboard/mouse (desktop app only). */
   private watchIdle(): void {
     const api = (window as any).electronAPI;
-    if (!api?.isElectron) return;
+    if (!api?.isElectron) {
+      this.watchIdleInBrowser();
+      return;
+    }
 
     api.onIdleStarted(() => {
       if (this.status() === 'active') {
@@ -62,6 +65,76 @@ export class TimerService {
       // gets counted just because they walked back to their desk.
       this.pausedForIdle.set(false);
     });
+  }
+
+  /**
+   * Website version: pause after 3 minutes with no activity and show a system
+   * notification that brings them back. Uses Chrome's Idle Detection API when
+   * allowed (sees the whole computer); otherwise falls back to activity inside
+   * this tab, and only while the tab is visible — a hidden tab can't tell
+   * "away" from "working in another app".
+   */
+  private watchIdleInBrowser(): void {
+    const IDLE_SECONDS = 180;
+    let lastActivity = Date.now();
+    const touch = () => (lastActivity = Date.now());
+    for (const ev of ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'wheel']) {
+      window.addEventListener(ev, touch, { passive: true });
+    }
+
+    const goIdle = (awaySeconds: number) => {
+      if (this.status() !== 'active') return;
+      this.pausedForIdle.set(true);
+      this.pause(awaySeconds);
+      this.notifyIdle();
+    };
+
+    const Detector = (window as any).IdleDetector;
+    this.systemIdleWatching = false;
+    this.startSystemIdle = async () => {
+      if (this.systemIdleWatching || !Detector) return;
+      try {
+        if ((await Detector.requestPermission()) !== 'granted') return;
+        const detector = new Detector();
+        detector.addEventListener('change', () => {
+          if (detector.userState === 'idle' || detector.screenState === 'locked') goIdle(IDLE_SECONDS);
+          else this.pausedForIdle.set(false);
+        });
+        await detector.start({ threshold: IDLE_SECONDS * 1000 });
+        this.systemIdleWatching = true;
+      } catch {
+        // Not allowed or unsupported — the in-tab fallback below still runs.
+      }
+    };
+
+    setInterval(() => {
+      if (this.systemIdleWatching || document.visibilityState !== 'visible') return;
+      const idleFor = Math.floor((Date.now() - lastActivity) / 1000);
+      if (idleFor >= IDLE_SECONDS) goIdle(idleFor);
+    }, 5000);
+  }
+
+  private systemIdleWatching = false;
+  private startSystemIdle: () => Promise<void> = async () => {};
+
+  private notifyIdle(): void {
+    if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const n = new Notification('Your timer was paused', {
+      body: 'No activity for 3 minutes. Click to go back and press Resume.',
+      requireInteraction: true,
+    });
+    n.onclick = () => {
+      window.focus();
+      n.close();
+    };
+  }
+
+  /** Ask (once, from a click) for the browser permissions idle-stop needs. */
+  private requestIdlePermissions(): void {
+    try {
+      if (typeof Notification !== 'undefined' && Notification.permission === 'default') Notification.requestPermission();
+    } catch {}
+    void this.startSystemIdle();
   }
 
   /** Restore the signed-in person's own running/paused timer (if any). */
@@ -135,6 +208,9 @@ export class TimerService {
       console.warn('A session is already active');
       return false;
     }
+
+    // Must run straight from the click, before any awaiting
+    this.requestIdlePermissions();
 
     // Also check the database, not just this tab's memory — catches an active
     // timer started from another device or tab before this one loaded it.
@@ -219,16 +295,17 @@ export class TimerService {
     return true;
   }
 
-  async pause(): Promise<void> {
+  /** `awaySeconds`: how long the person was already idle — that stretch isn't counted as work. */
+  async pause(awaySeconds = 0): Promise<void> {
     const entry = this.activeEntry();
     if (!entry || this.status() !== 'active') return;
 
     this.stopTicker();
-    const now = Date.now();
+    const now = Date.now() - awaySeconds * 1000;
 
     entry.status = 'paused';
     entry.lastPauseTime = now;
-    entry.durationSeconds = this.wallElapsedSeconds();
+    entry.durationSeconds = Math.max(0, this.wallElapsedSeconds() - awaySeconds);
     entry.totalPay = (entry.durationSeconds / 3600) * entry.hourlyRate;
 
     await this.db.saveTimeEntry(entry);

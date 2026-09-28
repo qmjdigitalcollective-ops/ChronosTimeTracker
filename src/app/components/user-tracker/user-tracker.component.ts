@@ -121,7 +121,7 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
                 </span>
               }
               @if (timerService.pausedForIdle()) {
-                <span class="paused-text">• Paused automatically — no activity for 2 minutes</span>
+                <span class="paused-text">• Paused automatically — no activity for a few minutes. Press Resume when you're back</span>
               }
             } @else {
               <span class="idle-text">Choose a project and task, then start tracking</span>
