@@ -388,11 +388,20 @@ export class TimerService {
     // Clocking out while paused: the paused stretch isn't work, so use the time frozen at the pause
     const wasPaused = entry.status === 'paused';
     const finalDuration = wasPaused ? entry.durationSeconds : this.wallElapsedSeconds();
-    const openPause = this.currentPause();
-    if (wasPaused && openPause) {
-      openPause.endedAt = now;
-      this.db.savePause(openPause).catch(() => {});
-      this.currentPause.set(null);
+    if (wasPaused) {
+      // Same fallback as resume(): if the page was reloaded while paused, the in-memory
+      // currentPause is gone, but the pause record in the database is still open and
+      // needs to be closed here too — otherwise it stays open forever.
+      let openPause = this.currentPause();
+      if (!openPause) {
+        const open = (await this.db.getPauses(entry.id).catch(() => [] as TimePause[])).filter((p) => !p.endedAt);
+        openPause = open[open.length - 1] ?? null;
+      }
+      if (openPause) {
+        openPause.endedAt = now;
+        this.db.savePause(openPause).catch(() => {});
+        this.currentPause.set(null);
+      }
     }
     entry.durationSeconds = finalDuration;
     entry.endTime = now;
