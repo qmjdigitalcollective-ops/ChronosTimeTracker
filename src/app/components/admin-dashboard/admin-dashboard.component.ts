@@ -26,6 +26,7 @@ import {
   TeamPermissionRow,
   TimePause,
   PAUSE_REASONS,
+  WorkTask,
 } from '../../models/time-tracker.models';
 import { DEFAULT_MEMBER_PERMISSIONS, PERMISSION_LABELS, effectivePermissions } from '../../services/permissions';
 import { IconComponent } from '../icon/icon.component';
@@ -49,6 +50,7 @@ type AdminTab =
   | 'contracts'
   | 'gallery'
   | 'importExport'
+  | 'tasks'
   | 'settings';
 
 type TrackedMode = 'hours' | 'pay' | 'bill';
@@ -1267,6 +1269,98 @@ const DAY_MS = 24 * 60 * 60 * 1000;
             }
           </div>
           <app-paginator [total]="filteredScreenshots().length" [(page)]="galleryPage" [(pageSize)]="galleryPageSize" [pageSizeOptions]="[24, 48, 96]" unit="screenshots" />
+        </div>
+      }
+
+      <!-- TAB: TEAM TASKS -->
+      @if (activeTab() === 'tasks') {
+        <div class="content-panel">
+          <div class="panel-header">
+            <div>
+              <h3 class="panel-heading">Team Tasks</h3>
+              <p class="panel-sub">Everyone's to-do list in one place — from ClickUp, or added here directly.</p>
+            </div>
+            <div class="filters-wrap">
+              <select class="filter-select" [ngModel]="taskFilterEmployee()" (ngModelChange)="taskFilterEmployee.set($event)">
+                <option value="ALL">All Staff</option>
+                @for (emp of employees(); track emp.id) {
+                  <option [value]="emp.id">{{ emp.name }}</option>
+                }
+              </select>
+              <select class="filter-select" [ngModel]="taskFilterStatus()" (ngModelChange)="taskFilterStatus.set($event)">
+                <option value="ALL">All statuses</option>
+                <option value="todo">To do</option>
+                <option value="in_progress">In progress</option>
+                <option value="done">Done</option>
+              </select>
+            </div>
+            <button type="button" class="action-btn" (click)="openAddTaskModal()"><app-icon name="plus" [size]="14" /> Add task</button>
+          </div>
+
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>Assigned To</th>
+                  <th>Task</th>
+                  <th>Project</th>
+                  <th>Status</th>
+                  <th>Source</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                @for (t of filteredTasks(); track t.id) {
+                  <tr>
+                    <td class="font-bold">{{ t.employeeId ? employeeName(t.employeeId) : '—' }}</td>
+                    <td class="task-cell-main" [title]="t.title">
+                      @if (t.clickupUrl) {
+                        <a [href]="t.clickupUrl" target="_blank" rel="noopener">{{ t.title }}</a>
+                      } @else {
+                        {{ t.title }}
+                      }
+                    </td>
+                    <td>@if (t.clientName) { <span class="client-badge">{{ t.clientName }}</span> }</td>
+                    <td><span class="ts-status" [attr.data-status]="t.status">{{ taskStatusLabel(t.status) }}</span></td>
+                    <td class="text-muted">{{ t.source === 'clickup' ? 'ClickUp' : 'Manual' }}</td>
+                    <td>
+                      <div class="row-actions">
+                        <button type="button" class="btn-sm" (click)="deleteTask(t)">Delete</button>
+                      </div>
+                    </td>
+                  </tr>
+                } @empty {
+                  <tr><td colspan="6" class="empty-cell">No tasks yet — add one, or sync from ClickUp under Import &amp; Export.</td></tr>
+                }
+              </tbody>
+            </table>
+          </div>
+        </div>
+      }
+
+      @if (addTaskOpen()) {
+        <div class="modal-overlay" (click)="addTaskOpen.set(false)">
+          <div class="modal-card" (click)="$event.stopPropagation()">
+            <h3>Add a task</h3>
+            <label>Assign to
+              <select class="form-select" [(ngModel)]="addTaskForm.employeeId">
+                @for (emp of employees(); track emp.id) { <option [value]="emp.id">{{ emp.name }}</option> }
+              </select>
+            </label>
+            <label>Project (optional)
+              <select class="form-select" [(ngModel)]="addTaskForm.clientId">
+                <option value="">No project</option>
+                @for (cli of clients(); track cli.id) { <option [value]="cli.id">{{ cli.name }}</option> }
+              </select>
+            </label>
+            <label>Task
+              <input type="text" class="form-input" [(ngModel)]="addTaskForm.title" placeholder="What needs to be done" />
+            </label>
+            <div class="modal-actions">
+              <button type="button" class="btn-cancel" (click)="addTaskOpen.set(false)">Cancel</button>
+              <button type="button" class="btn-save" (click)="submitAddTask()">Add task</button>
+            </div>
+          </div>
         </div>
       }
 
@@ -3353,6 +3447,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
         { tab: 'realtime', label: 'Real Time', icon: 'activity' },
         { tab: 'tracked', label: 'Tracked Hours', icon: 'chart' },
         { tab: 'gallery', label: 'Screenshots', icon: 'image' },
+        { tab: 'tasks', label: 'Team Tasks', icon: 'check' },
       ],
     },
     {
@@ -3431,6 +3526,55 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   entries = signal<TimeEntry[]>([]);
   screenshots = signal<ScreenshotRecord[]>([]);
   pauses = signal<TimePause[]>([]);
+  tasks = signal<WorkTask[]>([]);
+  taskFilterEmployee = signal<string>('ALL');
+  taskFilterStatus = signal<string>('ALL');
+  addTaskOpen = signal(false);
+  addTaskForm = { employeeId: '', clientId: '', title: '' };
+
+  filteredTasks(): WorkTask[] {
+    return this.tasks()
+      .filter((t) => this.taskFilterEmployee() === 'ALL' || t.employeeId === this.taskFilterEmployee())
+      .filter((t) => this.taskFilterStatus() === 'ALL' || t.status === this.taskFilterStatus())
+      .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  taskStatusLabel(status: WorkTask['status']): string {
+    return status === 'in_progress' ? 'In progress' : status === 'done' ? 'Done' : 'To do';
+  }
+
+  openAddTaskModal(): void {
+    this.addTaskForm = { employeeId: this.employees()[0]?.id ?? '', clientId: '', title: '' };
+    this.addTaskOpen.set(true);
+  }
+
+  async submitAddTask(): Promise<void> {
+    const f = this.addTaskForm;
+    if (!f.employeeId || !f.title.trim()) return;
+    const emp = this.employees().find((e) => e.id === f.employeeId);
+    const cli = this.clients().find((c) => c.id === f.clientId);
+    const now = Date.now();
+    const task: WorkTask = {
+      id: 'task_' + now + '_' + Math.random().toString(36).substring(2, 6),
+      employeeId: f.employeeId,
+      clientId: cli?.id ?? null,
+      clientName: cli?.name ?? null,
+      title: f.title.trim(),
+      status: 'todo',
+      source: 'manual',
+      createdAt: now,
+      updatedAt: now,
+    };
+    await this.db.upsertTask(task);
+    this.addTaskOpen.set(false);
+    this.tasks.set(await this.db.getTasks());
+  }
+
+  async deleteTask(task: WorkTask): Promise<void> {
+    if (!confirm(`Delete "${task.title}"?`)) return;
+    await this.db.deleteTask(task.id);
+    this.tasks.set(await this.db.getTasks());
+  }
   settings = signal<AppSettings | null>(null);
   selectedScreenshot = signal<ScreenshotRecord | null>(null);
 
@@ -3557,6 +3701,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     this.screenshots.set(sss);
     this.settings.set(sets);
     this.pauses.set(await this.db.getPauses().catch(() => []));
+    this.tasks.set(await this.db.getTasks().catch(() => []));
   }
 
   // --- Pay Period / Date Range ---

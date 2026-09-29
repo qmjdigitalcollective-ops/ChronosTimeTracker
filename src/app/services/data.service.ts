@@ -581,6 +581,29 @@ export class DataService {
     await this.upsertRow('tasks', { id: task.id, status }, task.id);
   }
 
+  /** Admin only — the gate function rejects this for anyone else (see TASK_SELF_EDITABLE_FIELDS). */
+  async upsertTask(task: WorkTask): Promise<void> {
+    await this.upsertRow(
+      'tasks',
+      {
+        id: task.id,
+        employee_id: task.employeeId,
+        client_id: task.clientId,
+        client_name: task.clientName,
+        title: task.title,
+        status: task.status,
+        source: task.source,
+        created_at: task.createdAt,
+        updated_at: task.updatedAt,
+      },
+      task.id
+    );
+  }
+
+  async deleteTask(id: string): Promise<void> {
+    await this.deleteRow('tasks', id);
+  }
+
   /** Admin only — pulls each team member's open ClickUp tasks in by matching email/list name. */
   async syncClickUpTasks(): Promise<{ imported: number; skippedUnassigned: number; removedStale: number }> {
     return await this.call({ op: 'clickup_sync', token: this.getToken() });
