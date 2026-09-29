@@ -3849,6 +3849,11 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   private readonly money = new MoneyPipe();
 
   async ngOnInit(): Promise<void> {
+    // Show what we already know INSTANTLY (from last time), instead of a blank screen
+    // while the network catches up — then quietly replace it with the real, fresh data.
+    // Opening the app used to feel like starting from scratch every time; this is why.
+    this.loadCachedSnapshot();
+
     // Bring back my own running timer (so the top-bar timer shows on every page)
     const me = this.authService.currentUser();
     if (me && this.timerService.status() === 'completed') await this.timerService.restoreActiveSession(me.id);
@@ -3862,6 +3867,42 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     // contracts, settings, payouts, approvals, permissions, pauses, tasks) barely changes
     // minute to minute, and already gets refreshed right after whatever action changed it.
     this.refreshTimer = setInterval(() => this.refreshLiveEntries(), 60000);
+  }
+
+  private readonly SNAPSHOT_KEY = 'auravia_admin_snapshot_v1';
+
+  /** Instantly fill the screen from last session's data, before the network reply arrives. */
+  private loadCachedSnapshot(): void {
+    try {
+      const raw = localStorage.getItem(this.SNAPSHOT_KEY);
+      if (!raw) return;
+      const snap = JSON.parse(raw);
+      if (snap.employees) this.employees.set(snap.employees);
+      if (snap.clients) this.clients.set(snap.clients);
+      if (snap.entries) this.entries.set(snap.entries);
+      if (snap.contracts) this.contracts.set(snap.contracts);
+      if (snap.payouts) this.payouts.set(snap.payouts);
+    } catch {
+      // A corrupt or missing cache just means a normal (slightly slower) first load — never block on it.
+    }
+  }
+
+  /** Save what's on screen now, so the NEXT time this page opens, it isn't blank while loading. */
+  private saveCachedSnapshot(): void {
+    try {
+      localStorage.setItem(
+        this.SNAPSHOT_KEY,
+        JSON.stringify({
+          employees: this.employees(),
+          clients: this.clients(),
+          entries: this.entries(),
+          contracts: this.contracts(),
+          payouts: this.payouts(),
+        })
+      );
+    } catch {
+      // Browser storage full or blocked (e.g. private mode) — caching is a nice-to-have, not required.
+    }
   }
 
   ngOnDestroy(): void {
@@ -3902,6 +3943,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     this.settings.set(sets);
     this.pauses.set(await this.db.getPauses().catch(() => []));
     this.tasks.set(await this.db.getTasks().catch(() => []));
+    this.saveCachedSnapshot();
   }
 
   // --- Pay Period / Date Range ---

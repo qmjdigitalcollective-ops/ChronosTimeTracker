@@ -1482,6 +1482,7 @@ export class UserTrackerComponent implements OnInit {
     this.myApprovals.set(approvals.filter((a) => a.employeeId === me.id));
     this.perms.set(effectivePermissions(await this.db.getPermissions(), me));
     if (!this.perms().viewHistory) this.historyView.set('today');
+    this.saveCachedSnapshot(me.id);
   }
 
   private inPeriod(e: TimeEntry, [start, end]: [Date, Date]): boolean {
@@ -1635,10 +1636,49 @@ export class UserTrackerComponent implements OnInit {
   }
 
   async ngOnInit(): Promise<void> {
-    const me = this.authService.currentUser();
-    if (me) await this.timerService.restoreActiveSession(me.id);
+    // Show what we already know instantly (from last time this device was used), instead of
+    // a blank screen while the network catches up — opening the app used to feel like
+    // starting from scratch every time; this is why.
+    const me0 = this.authService.currentUser();
+    if (me0) this.loadCachedSnapshot(me0.id);
+
+    if (me0) await this.timerService.restoreActiveSession(me0.id);
     await this.loadClients();
     await this.loadMyTasks();
+  }
+
+  private snapshotKey(employeeId: string): string {
+    return `auravia_member_snapshot_${employeeId}_v1`;
+  }
+
+  private loadCachedSnapshot(employeeId: string): void {
+    try {
+      const raw = localStorage.getItem(this.snapshotKey(employeeId));
+      if (!raw) return;
+      const snap = JSON.parse(raw);
+      if (snap.myEntries) this.myEntries.set(snap.myEntries);
+      if (snap.myPayouts) this.myPayouts.set(snap.myPayouts);
+      if (snap.clients) this.clients.set(snap.clients);
+      if (snap.myTasks) this.myTasks.set(snap.myTasks);
+    } catch {
+      // A corrupt or missing cache just means a normal first load — never block on it.
+    }
+  }
+
+  private saveCachedSnapshot(employeeId: string): void {
+    try {
+      localStorage.setItem(
+        this.snapshotKey(employeeId),
+        JSON.stringify({
+          myEntries: this.myEntries(),
+          myPayouts: this.myPayouts(),
+          clients: this.clients(),
+          myTasks: this.myTasks(),
+        })
+      );
+    } catch {
+      // Browser storage full or blocked — caching is a nice-to-have, not required.
+    }
   }
 
   async loadClients(): Promise<void> {
