@@ -10,7 +10,7 @@ import {
   Contract,
   Payout,
   TimesheetApproval,
-  TeamPermissionRow, TimePause, PauseReason } from '../models/time-tracker.models';
+  TeamPermissionRow, TimePause, PauseReason, WorkTask, TaskStatus } from '../models/time-tracker.models';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The app no longer talks to Supabase directly. Every read and write goes
@@ -157,6 +157,23 @@ function fromPause(p: TimePause): Row {
     paid: p.paid,
     started_at: p.startedAt,
     ended_at: p.endedAt ?? null,
+  };
+}
+
+function toTask(r: Row): WorkTask {
+  return {
+    id: String(r['id']),
+    employeeId: str(r['employee_id']) ?? null,
+    clientId: str(r['client_id']) ?? null,
+    clientName: str(r['client_name']) ?? null,
+    title: String(r['title'] ?? ''),
+    status: (r['status'] as TaskStatus) ?? 'todo',
+    source: (r['source'] as WorkTask['source']) ?? 'manual',
+    clickupTaskId: str(r['clickup_task_id']),
+    clickupUrl: str(r['clickup_url']),
+    dueDate: num(r['due_date']),
+    createdAt: Number(r['created_at'] ?? 0),
+    updatedAt: Number(r['updated_at'] ?? 0),
   };
 }
 
@@ -551,6 +568,22 @@ export class DataService {
 
   async savePause(pause: TimePause): Promise<void> {
     await this.upsertRow('time_pauses', fromPause(pause), pause.id);
+  }
+
+  // ── Tasks (to-do list, manual or synced from ClickUp) ─────────────────────
+
+  async getTasks(employeeId?: string): Promise<WorkTask[]> {
+    const rows = await this.select('tasks', employeeId ? { employee_id: employeeId } : undefined);
+    return rows.map(toTask).sort((a, b) => a.createdAt - b.createdAt);
+  }
+
+  async setTaskStatus(task: WorkTask, status: TaskStatus): Promise<void> {
+    await this.upsertRow('tasks', { id: task.id, status }, task.id);
+  }
+
+  /** Admin only — pulls each team member's open ClickUp tasks in by matching email/list name. */
+  async syncClickUpTasks(): Promise<{ imported: number; skippedUnassigned: number; removedStale: number }> {
+    return await this.call({ op: 'clickup_sync', token: this.getToken() });
   }
 
   // ── Screenshots ───────────────────────────────────────────────────────────

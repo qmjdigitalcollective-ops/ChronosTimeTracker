@@ -171,3 +171,20 @@ export interface TimePause {
   startedAt: number;
   endedAt?: number;
 }
+
+export type TaskStatus = 'todo' | 'in_progress' | 'done';
+
+export interface WorkTask {
+  id: string;
+  employeeId: string | null;
+  clientId: string | null;
+  clientName: string | null;
+  title: string;
+  status: TaskStatus;
+  source: 'manual' | 'clickup';
+  clickupTaskId?: string;
+  clickupUrl?: string;
+  dueDate?: number;
+  createdAt: number;
+  updatedAt: number;
+}

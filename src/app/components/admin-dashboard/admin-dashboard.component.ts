@@ -1321,6 +1321,25 @@ const DAY_MS = 24 * 60 * 60 * 1000;
             </div>
 
             <div class="ie-card">
+              <h4 class="ie-card-title">Sync tasks from ClickUp</h4>
+              <p class="ie-card-sub">Pulls each team member's open ClickUp tasks into their own "My To-Do" list, matched by email. Safe to run anytime — it won't touch a task someone's already started.</p>
+              <div class="ie-btn-list">
+                <button type="button" class="btn-sm ie-btn" [disabled]="clickupSyncBusy()" (click)="syncClickUp()">
+                  <app-icon name="download" [size]="14" /> {{ clickupSyncBusy() ? 'Syncing…' : 'Sync now' }}
+                </button>
+              </div>
+              @if (clickupSyncResult(); as r) {
+                <div class="test-feedback" [class.success]="!r.error" [class.error]="!!r.error">
+                  @if (r.error) {
+                    {{ r.error }}
+                  } @else {
+                    Imported/updated {{ r.imported }} tasks. {{ r.skippedUnassigned }} ClickUp tasks had no matching team member. Removed {{ r.removedStale }} tasks that no longer exist on ClickUp.
+                  }
+                </div>
+              }
+            </div>
+
+            <div class="ie-card">
               <h4 class="ie-card-title">Full backup (JSON)</h4>
               <p class="ie-card-sub">Everything: people, projects, contracts, time, screenshots, payments and settings.</p>
               <div class="ie-btn-list">
@@ -3260,6 +3279,22 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   payslipFor = signal<Payout | null>(null);
   menuOpen = signal<boolean>(false);
   showColumnPicker = signal<boolean>(false);
+  clickupSyncBusy = signal<boolean>(false);
+  clickupSyncResult = signal<{ imported: number; skippedUnassigned: number; removedStale: number; error?: string } | null>(null);
+
+  async syncClickUp(): Promise<void> {
+    this.clickupSyncBusy.set(true);
+    this.clickupSyncResult.set(null);
+    try {
+      const r = await this.db.syncClickUpTasks();
+      this.clickupSyncResult.set(r);
+    } catch (e) {
+      this.clickupSyncResult.set({ imported: 0, skippedUnassigned: 0, removedStale: 0, error: 'Could not sync: ' + e });
+    } finally {
+      this.clickupSyncBusy.set(false);
+    }
+  }
+
   csvImportBusy = signal<boolean>(false);
   csvImportResult = signal<{ total: number; added: number; errors: string[] } | null>(null);
 

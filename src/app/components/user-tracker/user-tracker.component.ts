@@ -6,7 +6,7 @@ import { TimerService } from '../../services/timer.service';
 import { AuthService } from '../../services/auth.service';
 import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
 import { MoneyPipe } from '../../pipes/money.pipe';
-import { PAUSE_REASONS, PauseReason, Client, MemberPermissions, Payout, TimeEntry, TimesheetApproval, SELF_MANUAL_ENTRY_PREFIX } from '../../models/time-tracker.models';
+import { PAUSE_REASONS, PauseReason, Client, MemberPermissions, Payout, TimeEntry, TimesheetApproval, SELF_MANUAL_ENTRY_PREFIX, WorkTask } from '../../models/time-tracker.models';
 import { payRateFor } from '../../services/rates';
 import { DEFAULT_MEMBER_PERMISSIONS, effectivePermissions } from '../../services/permissions';
 import { IconComponent } from '../icon/icon.component';
@@ -47,6 +47,25 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
             </span>
           </div>
         </div>
+
+        <!-- My To-Do (from ClickUp, or added by an admin) -->
+        @if (myOpenTasks().length > 0) {
+          <div class="todo-panel">
+            <span class="todo-heading">My To-Do</span>
+            @for (t of myOpenTasks(); track t.id) {
+              <div class="todo-row" [class.in-progress]="t.status === 'in_progress'">
+                <span class="todo-title">{{ t.title }}</span>
+                @if (t.clientName) { <span class="client-badge todo-client">{{ t.clientName }}</span> }
+                <div class="todo-actions">
+                  @if (t.status !== 'in_progress') {
+                    <button type="button" class="btn-sm" [disabled]="timerService.status() !== 'completed'" (click)="startTask(t)">Start</button>
+                  }
+                  <button type="button" class="btn-sm" (click)="markTaskDone(t)">Done</button>
+                </div>
+              </div>
+            }
+          </div>
+        }
 
         <!-- Task & Client Selection -->
         <div class="selection-grid">
@@ -654,6 +673,56 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
       border-color: var(--av-gold);
       color: var(--av-gold-text);
     }
+    .todo-panel {
+      background: var(--av-surface-2);
+      border: 1px solid var(--av-border);
+      border-radius: 12px;
+      padding: 12px 14px;
+      margin-bottom: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .todo-heading {
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: var(--av-text-faint);
+    }
+    .todo-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 6px 0;
+      border-top: 1px dashed var(--av-border);
+    }
+    .todo-row:first-of-type { border-top: none; }
+    .todo-row.in-progress .todo-title { color: var(--av-gold-text); font-weight: 600; }
+    .todo-title { font-size: 0.85rem; flex: 1; min-width: 140px; }
+    .todo-client { font-size: 0.7rem; }
+    .todo-actions { display: flex; gap: 6px; }
+    .btn-sm {
+      border: 1px solid var(--av-border);
+      background: var(--av-surface);
+      color: var(--av-text);
+      border-radius: 999px;
+      padding: 4px 12px;
+      font-size: 0.75rem;
+      cursor: pointer;
+    }
+    .btn-sm:hover:not(:disabled) { border-color: var(--av-gold); }
+    .btn-sm:disabled { opacity: 0.4; cursor: not-allowed; }
+    .client-badge {
+      background: var(--av-chip-bg, var(--av-surface));
+      border: 1px solid var(--av-border);
+      border-radius: 999px;
+      padding: 2px 9px;
+      font-size: 0.7rem;
+      font-weight: 600;
+      color: var(--av-forest, var(--av-text));
+    }
     .timer-display-wrap {
       text-align: center;
       padding: 2.25rem 1rem;
@@ -1242,6 +1311,34 @@ export class UserTrackerComponent implements OnInit {
   readonly pauseReasons = PAUSE_REASONS;
   readonly pauseMenuOpen = signal(false);
 
+  myTasks = signal<WorkTask[]>([]);
+
+  myOpenTasks(): WorkTask[] {
+    return this.myTasks().filter((t) => t.status !== 'done');
+  }
+
+  async loadMyTasks(): Promise<void> {
+    const me = this.authService.currentUser();
+    if (!me) return;
+    this.myTasks.set(await this.db.getTasks(me.id).catch(() => []));
+  }
+
+  startTask(task: WorkTask): void {
+    if (task.clientId && this.clients().some((c) => c.id === task.clientId)) {
+      this.selectedClientId.set(task.clientId);
+    }
+    this.taskDescription.set(task.title);
+    this.onClockInClick();
+    if (task.status !== 'in_progress') {
+      this.db.setTaskStatus(task, 'in_progress').then(() => this.loadMyTasks());
+    }
+  }
+
+  async markTaskDone(task: WorkTask): Promise<void> {
+    await this.db.setTaskStatus(task, 'done');
+    await this.loadMyTasks();
+  }
+
   addTimeOpen = signal(false);
   addTimeError = signal<string | null>(null);
   addTimeForm = { clientId: '', date: '', start: '09:00', end: '10:00', task: '' };
@@ -1541,6 +1638,7 @@ export class UserTrackerComponent implements OnInit {
     const me = this.authService.currentUser();
     if (me) await this.timerService.restoreActiveSession(me.id);
     await this.loadClients();
+    await this.loadMyTasks();
   }
 
   async loadClients(): Promise<void> {
