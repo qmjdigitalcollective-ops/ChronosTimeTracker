@@ -3633,6 +3633,14 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   goTo(tab: AdminTab): void {
     this.activeTab.set(tab);
     this.menuOpen.set(false);
+    // Screenshot images are only fetched when this tab is actually opened, not on every
+    // refresh — full-history base64 images were re-downloaded on every action anywhere
+    // in the app, which is what was blowing through the Supabase egress quota.
+    if (tab === 'gallery') this.loadScreenshots();
+  }
+
+  async loadScreenshots(): Promise<void> {
+    this.screenshots.set(await this.db.getScreenshots().catch(() => []));
   }
 
   currentMenuLabel(): string {
@@ -3847,8 +3855,10 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     this.applyPreset('this-period');
     await this.refreshAllData();
     this.cloudTablesReady.set(await this.db.cloudTablesReady());
-    // Keep "who's working" fresh
-    this.refreshTimer = setInterval(() => this.refreshAllData(), 30000);
+    // Keep "who's working" fresh. This used to run every 30 seconds, all day, re-downloading
+    // every table (plus, until the fix above, every screenshot's full image) on every tick —
+    // the real driver behind exceeding the Supabase egress quota, not database size.
+    this.refreshTimer = setInterval(() => this.refreshAllData(), 120000);
   }
 
   ngOnDestroy(): void {
@@ -3860,15 +3870,17 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   }
 
   async refreshAllData(): Promise<void> {
-    const [emps, clis, ents, sss, sets, cons, pays] = await Promise.all([
+    const [emps, clis, ents, sets, cons, pays] = await Promise.all([
       this.db.getEmployees(),
       this.db.getClients(),
       this.db.getTimeEntries(),
-      this.db.getScreenshots(),
       this.db.getSettings(),
       this.db.getContracts(),
       this.db.getPayouts(),
     ]);
+    // Re-load screenshot images only if the Gallery tab is the one currently open —
+    // see loadScreenshots() / goTo(). Every other tab never needed this data at all.
+    if (this.activeTab() === 'gallery') this.loadScreenshots();
 
     this.approvals.set(await this.db.getApprovals());
     this.permissionRows.set(await this.db.getPermissions());
@@ -3879,7 +3891,6 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     this.employees.set(emps);
     this.clients.set(clis);
     this.entries.set(ents);
-    this.screenshots.set(sss);
     this.settings.set(sets);
     this.pauses.set(await this.db.getPauses().catch(() => []));
     this.tasks.set(await this.db.getTasks().catch(() => []));
