@@ -110,6 +110,7 @@ function toTimeEntry(r: Row): TimeEntry {
     totalPay: Number(r['total_pay'] ?? 0),
     screenshotCount: Number(r['screenshot_count'] ?? 0),
     lastPauseTime: num(r['last_pause_time']),
+    approvalStatus: r['approval_status'] as TimeEntry['approvalStatus'],
   };
 }
 
@@ -131,6 +132,7 @@ function fromTimeEntry(e: TimeEntry): Row {
     total_pay: e.totalPay,
     screenshot_count: e.screenshotCount,
     last_pause_time: e.lastPauseTime ?? null,
+    approval_status: e.approvalStatus ?? null,
   };
 }
 

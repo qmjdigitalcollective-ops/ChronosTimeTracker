@@ -6,7 +6,8 @@ import { TimerService } from '../../services/timer.service';
 import { AuthService } from '../../services/auth.service';
 import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
 import { MoneyPipe } from '../../pipes/money.pipe';
-import { PAUSE_REASONS, PauseReason, Client, MemberPermissions, Payout, TimeEntry, TimesheetApproval } from '../../models/time-tracker.models';
+import { PAUSE_REASONS, PauseReason, Client, MemberPermissions, Payout, TimeEntry, TimesheetApproval, SELF_MANUAL_ENTRY_PREFIX } from '../../models/time-tracker.models';
+import { payRateFor } from '../../services/rates';
 import { DEFAULT_MEMBER_PERMISSIONS, effectivePermissions } from '../../services/permissions';
 import { IconComponent } from '../icon/icon.component';
 import { PayslipComponent } from '../payslip/payslip.component';
@@ -207,7 +208,41 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
             </button>
           }
         </div>
+        @if (timerService.status() === 'completed') {
+          <button type="button" class="btn-add-time" (click)="openAddTime()">
+            <app-icon name="plus" [size]="14" /> Add time worked earlier
+          </button>
+        }
       </div>
+
+      @if (addTimeOpen()) {
+        <div class="modal-overlay" (click)="addTimeOpen.set(false)">
+          <div class="modal-card" (click)="$event.stopPropagation()">
+            <h3>Add time worked earlier</h3>
+            <p class="modal-sub">This won't count toward your pay until your admin approves it.</p>
+            <label>Project
+              <select class="form-select" [(ngModel)]="addTimeForm.clientId">
+                @for (cli of clients(); track cli.id) { <option [value]="cli.id">{{ cli.name }}</option> }
+              </select>
+            </label>
+            <label>Date
+              <input type="date" class="form-input" [(ngModel)]="addTimeForm.date" />
+            </label>
+            <div class="modal-row">
+              <label>Start <input type="time" class="form-input" [(ngModel)]="addTimeForm.start" /></label>
+              <label>End <input type="time" class="form-input" [(ngModel)]="addTimeForm.end" /></label>
+            </div>
+            <label>What did you work on?
+              <input type="text" class="form-input" [(ngModel)]="addTimeForm.task" placeholder="e.g. Edited the launch video" />
+            </label>
+            @if (addTimeError()) { <div class="sent-back">{{ addTimeError() }}</div> }
+            <div class="modal-actions">
+              <button type="button" class="btn-cancel" (click)="addTimeOpen.set(false)">Cancel</button>
+              <button type="button" class="btn-save" (click)="submitAddTime()">Submit for approval</button>
+            </div>
+          </div>
+        </div>
+      }
 
       <!-- My pay period (what I've earned and whether it's been paid) -->
       @if (perms().showPayPanel) {
@@ -932,6 +967,21 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
       gap: 10px;
       margin-top: 0.5rem;
     }
+    .btn-add-time {
+      margin-top: 10px; align-self: center; background: none; border: none; cursor: pointer;
+      display: inline-flex; align-items: center; gap: 6px; font-size: 0.82rem; color: var(--av-text-muted);
+      text-decoration: underline; text-underline-offset: 3px;
+    }
+    .btn-add-time:hover { color: var(--av-text); }
+    .modal-sub { font-size: 0.85rem; color: var(--av-text-muted); margin: -8px 0 14px; }
+    .modal-row { display: flex; gap: 10px; }
+    .modal-row label { flex: 1; }
+    .modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+    .btn-save {
+      background: var(--av-forest); color: white; border: none; border-radius: 10px;
+      padding: 9px 18px; font-weight: 600; cursor: pointer;
+    }
+    .btn-save:hover { background: var(--av-forest-hover); }
     .btn-cancel {
       background: transparent;
       border: 1px solid var(--av-border);
@@ -1192,6 +1242,69 @@ export class UserTrackerComponent implements OnInit {
   readonly pauseReasons = PAUSE_REASONS;
   readonly pauseMenuOpen = signal(false);
 
+  addTimeOpen = signal(false);
+  addTimeError = signal<string | null>(null);
+  addTimeForm = { clientId: '', date: '', start: '09:00', end: '10:00', task: '' };
+
+  openAddTime(): void {
+    this.addTimeError.set(null);
+    this.addTimeForm = {
+      clientId: this.clients()[0]?.id ?? '',
+      date: new Date().toISOString().slice(0, 10),
+      start: '09:00',
+      end: '10:00',
+      task: '',
+    };
+    this.addTimeOpen.set(true);
+  }
+
+  async submitAddTime(): Promise<void> {
+    const f = this.addTimeForm;
+    const me = this.authService.currentUser();
+    const cli = this.clients().find((c) => c.id === f.clientId);
+    if (!me || !cli || !f.date) {
+      this.addTimeError.set('Pick a project and date.');
+      return;
+    }
+    const [y, mo, d] = f.date.split('-').map(Number);
+    const [h1, m1] = f.start.split(':').map(Number);
+    const [h2, m2] = f.end.split(':').map(Number);
+    const startTime = new Date(y, mo - 1, d, h1, m1).getTime();
+    let endTime = new Date(y, mo - 1, d, h2, m2).getTime();
+    if (endTime <= startTime) endTime += 24 * 60 * 60 * 1000;
+    const durationSeconds = Math.round((endTime - startTime) / 1000);
+    if (durationSeconds > 16 * 3600) {
+      this.addTimeError.set('That is more than 16 hours — check the start and end time.');
+      return;
+    }
+    const contracts = await this.db.getContracts();
+    const hourlyRate = payRateFor(contracts, me, cli.id);
+    const entry: TimeEntry = {
+      id: SELF_MANUAL_ENTRY_PREFIX + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+      employeeId: me.id,
+      employeeName: me.name,
+      clientId: cli.id,
+      clientName: cli.name,
+      taskDescription: f.task.trim() || 'Added by team member',
+      startTime,
+      endTime,
+      durationSeconds,
+      pausedSeconds: 0,
+      status: 'completed',
+      hourlyRate,
+      totalPay: parseFloat(((durationSeconds / 3600) * hourlyRate).toFixed(2)),
+      screenshotCount: 0,
+      approvalStatus: 'pending',
+    };
+    try {
+      await this.db.saveTimeEntry(entry);
+      this.addTimeOpen.set(false);
+      await this.loadMyHistory();
+    } catch (e) {
+      this.addTimeError.set('Could not save: ' + e);
+    }
+  }
+
   pauseLabel(reason: PauseReason): string {
     return PAUSE_REASONS.find((r) => r.key === reason)?.label ?? reason;
   }
@@ -1278,12 +1391,17 @@ export class UserTrackerComponent implements OnInit {
     return e.startTime >= start.getTime() && e.startTime < end.getTime() + 24 * 60 * 60 * 1000;
   }
 
+  /** Excludes an entry the member added themselves that's still awaiting admin sign-off. */
+  private isCountable(e: TimeEntry): boolean {
+    return e.approvalStatus !== 'pending' && e.approvalStatus !== 'rejected';
+  }
+
   periodSeconds(period: [Date, Date]): number {
-    return this.myEntries().filter((e) => this.inPeriod(e, period)).reduce((acc, e) => acc + e.durationSeconds, 0);
+    return this.myEntries().filter((e) => this.inPeriod(e, period) && this.isCountable(e)).reduce((acc, e) => acc + e.durationSeconds, 0);
   }
 
   periodPay(period: [Date, Date]): number {
-    return this.myEntries().filter((e) => this.inPeriod(e, period)).reduce((acc, e) => acc + (e.totalPay || 0), 0);
+    return this.myEntries().filter((e) => this.inPeriod(e, period) && this.isCountable(e)).reduce((acc, e) => acc + (e.totalPay || 0), 0);
   }
 
   private payoutFor([start, end]: [Date, Date]): Payout | null {

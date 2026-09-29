@@ -486,6 +486,50 @@ const DAY_MS = 24 * 60 * 60 * 1000;
       <!-- TAB: TIMESHEET APPROVAL -->
       @if (activeTab() === 'approvals') {
         <div class="content-panel">
+          @if (pendingSelfAddedEntries().length > 0) {
+            <div class="panel-header">
+              <div>
+                <h3 class="panel-heading">Manually Added Time Awaiting Approval</h3>
+                <p class="panel-sub">A team member added this time themselves — it doesn't count toward pay or reports until you approve it.</p>
+              </div>
+            </div>
+            <div class="table-wrap" style="margin-bottom: 28px;">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>Member</th>
+                    <th>Date / Time</th>
+                    <th>Project</th>
+                    <th>Task</th>
+                    <th>Hours</th>
+                    <th>Pay</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  @for (entry of pendingSelfAddedEntries(); track entry.id) {
+                    <tr>
+                      <td class="font-bold">{{ entry.employeeName }}</td>
+                      <td class="text-muted">
+                        {{ formatDate(entry.startTime) }}
+                        <div class="time-sub">{{ formatTime(entry.startTime) }} – {{ entry.endTime ? formatTime(entry.endTime) : 'now' }}</div>
+                      </td>
+                      <td><span class="client-badge">{{ entry.clientName }}</span></td>
+                      <td class="task-cell-main" [title]="entry.taskDescription">{{ entry.taskDescription }}</td>
+                      <td class="duration-num">{{ (entry.durationSeconds / 3600) | number:'1.2-2' }}</td>
+                      <td class="pay-num">{{ entry.totalPay | money }}</td>
+                      <td>
+                        <div class="row-actions">
+                          <button type="button" class="btn-sm btn-pay" (click)="approveSelfAddedEntry(entry, true)">Approve</button>
+                          <button type="button" class="btn-sm" style="color: var(--av-danger, #a23c30); border-color: var(--av-danger, #a23c30);" (click)="approveSelfAddedEntry(entry, false)">Reject</button>
+                        </div>
+                      </td>
+                    </tr>
+                  }
+                </tbody>
+              </table>
+            </div>
+          }
           <div class="panel-header">
             <div>
               <h3 class="panel-heading">Timesheet Approval · {{ rangeLabel() }}</h3>
@@ -3551,6 +3595,26 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     return this.rangeEntries().reduce((acc, e) => acc + (e.screenshotCount || 0), 0);
   }
 
+  /** Entries a team member added themselves are held here until approved — they
+   * don't count toward pay, billing, or reports until then. */
+  pendingSelfAddedEntries(): TimeEntry[] {
+    return this.entries()
+      .filter((e) => e.approvalStatus === 'pending')
+      .sort((a, b) => b.startTime - a.startTime);
+  }
+
+  async approveSelfAddedEntry(entry: TimeEntry, approve: boolean): Promise<void> {
+    entry.approvalStatus = approve ? 'approved' : 'rejected';
+    await this.db.saveTimeEntry(entry);
+    await this.refreshAllData();
+  }
+
+  /** rangeEntries(), minus anything still awaiting sign-off — this is what pay,
+   * billing and profit are actually computed from. */
+  private payableRangeEntries(): TimeEntry[] {
+    return this.rangeEntries().filter((e) => e.approvalStatus !== 'pending' && e.approvalStatus !== 'rejected');
+  }
+
   /** The owner's own hours are personal earnings, not a payroll cost to the
    * business — so "Team Pay" (what you owe the team) and the pay-period
    * payout list leave them out entirely. Client billing is untouched: what a
@@ -3608,7 +3672,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   }
 
   totalPayrollExpense(): number {
-    return this.rangeEntries()
+    return this.payableRangeEntries()
       .filter((e) => !this.isOwnerEntry(e))
       .reduce((acc, curr) => acc + (curr.totalPay || 0), 0);
   }
@@ -3627,7 +3691,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   }
 
   totalBilled(): number {
-    return this.rangeEntries().reduce((acc, e) => acc + this.entryBilled(e), 0);
+    return this.payableRangeEntries().reduce((acc, e) => acc + this.entryBilled(e), 0);
   }
 
   totalProfit(): number {
@@ -3764,7 +3828,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       });
     }
 
-    for (const entry of this.rangeEntries()) {
+    for (const entry of this.payableRangeEntries()) {
       const rep = map.get(entry.employeeId);
       if (rep) {
         rep.totalEntries++;

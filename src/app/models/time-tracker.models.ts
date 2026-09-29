@@ -51,7 +51,13 @@ export interface TimeEntry {
   totalPay: number; // (durationSeconds / 3600) * hourlyRate
   screenshotCount: number;
   lastPauseTime?: number; // Epoch ms when paused
+  /** Only set on entries a team member added themselves (not a real clock-in) — needs admin sign-off. */
+  approvalStatus?: 'pending' | 'approved' | 'rejected';
 }
+
+/** IDs of team-member-submitted manual entries — distinct from admin's own MANUAL_ENTRY_PREFIX
+ * ("manual_") so the gate function can force approvalStatus without touching admin-added rows. */
+export const SELF_MANUAL_ENTRY_PREFIX = 'selfmanual_';
 
 export interface AppSettings {
   screenshotIntervalMinutes: number; // default 10
