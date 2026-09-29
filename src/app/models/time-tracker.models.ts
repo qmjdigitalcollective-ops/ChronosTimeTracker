@@ -183,6 +183,7 @@ export interface WorkTask {
   status: TaskStatus;
   source: 'manual' | 'clickup';
   clickupTaskId?: string;
+  clickupListId?: string;
   clickupUrl?: string;
   dueDate?: number;
   createdAt: number;

@@ -1274,11 +1274,11 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 
       <!-- TAB: TEAM TASKS -->
       @if (activeTab() === 'tasks') {
-        <div class="content-panel">
+        <div class="content-panel tasks-board-panel">
           <div class="panel-header">
             <div>
               <h3 class="panel-heading">Team Tasks</h3>
-              <p class="panel-sub">Everyone's to-do list in one place — from ClickUp, or added here directly.</p>
+              <p class="panel-sub">Everyone's to-do list, grouped by client — from ClickUp, or added here directly.</p>
             </div>
             <div class="filters-wrap">
               <select class="filter-select" [ngModel]="taskFilterEmployee()" (ngModelChange)="taskFilterEmployee.set($event)">
@@ -1287,54 +1287,72 @@ const DAY_MS = 24 * 60 * 60 * 1000;
                   <option [value]="emp.id">{{ emp.name }}</option>
                 }
               </select>
-              <select class="filter-select" [ngModel]="taskFilterStatus()" (ngModelChange)="taskFilterStatus.set($event)">
-                <option value="ALL">All statuses</option>
-                <option value="todo">To do</option>
-                <option value="in_progress">In progress</option>
-                <option value="done">Done</option>
-              </select>
             </div>
             <button type="button" class="action-btn" (click)="openAddTaskModal()"><app-icon name="plus" [size]="14" /> Add task</button>
           </div>
 
-          <div class="table-wrap">
-            <table class="data-table">
-              <thead>
-                <tr>
-                  <th>Assigned To</th>
-                  <th>Task</th>
-                  <th>Project</th>
-                  <th>Status</th>
-                  <th>Source</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                @for (t of filteredTasks(); track t.id) {
-                  <tr>
-                    <td class="font-bold">{{ t.employeeId ? employeeName(t.employeeId) : '—' }}</td>
-                    <td class="task-cell-main" [title]="t.title">
-                      @if (t.clickupUrl) {
-                        <a [href]="t.clickupUrl" target="_blank" rel="noopener">{{ t.title }}</a>
-                      } @else {
-                        {{ t.title }}
-                      }
-                    </td>
-                    <td>@if (t.clientName) { <span class="client-badge">{{ t.clientName }}</span> }</td>
-                    <td><span class="ts-status" [attr.data-status]="t.status">{{ taskStatusLabel(t.status) }}</span></td>
-                    <td class="text-muted">{{ t.source === 'clickup' ? 'ClickUp' : 'Manual' }}</td>
-                    <td>
-                      <div class="row-actions">
-                        <button type="button" class="btn-sm" (click)="deleteTask(t)">Delete</button>
-                      </div>
-                    </td>
-                  </tr>
-                } @empty {
-                  <tr><td colspan="6" class="empty-cell">No tasks yet — add one, or sync from ClickUp under Import &amp; Export.</td></tr>
-                }
-              </tbody>
-            </table>
+          <!-- Client chips — pick a project the way you'd pick a List in ClickUp -->
+          <div class="client-chip-row">
+            <button type="button" class="client-chip" [class.active]="taskFilterClient() === 'ALL'" (click)="taskFilterClient.set('ALL')">
+              All Clients <span class="chip-count">{{ tasks().length }}</span>
+            </button>
+            @for (c of taskClientChips(); track c.id) {
+              <button type="button" class="client-chip" [class.active]="taskFilterClient() === c.id" (click)="taskFilterClient.set(c.id)">
+                {{ c.name }} <span class="chip-count">{{ c.count }}</span>
+              </button>
+            }
           </div>
+
+          @if (filteredTasks().length === 0) {
+            <div class="empty-gallery">
+              <p>No tasks here yet — add one, or sync from ClickUp under Import &amp; Export.</p>
+            </div>
+          } @else {
+            <div class="task-board">
+              @for (col of taskColumns(); track col.status) {
+                <div class="task-column">
+                  <div class="task-column-head" [attr.data-status]="col.status">
+                    <span>{{ col.label }}</span>
+                    <span class="chip-count">{{ col.items.length }}</span>
+                  </div>
+                  <div class="task-column-body">
+                    @for (t of col.items; track t.id) {
+                      <div class="task-card">
+                        <div class="task-card-top">
+                          @if (t.clientName) { <span class="client-badge">{{ t.clientName }}</span> }
+                          @if (t.source === 'clickup') { <span class="source-pill" title="From ClickUp">CU</span> }
+                        </div>
+                        <div class="task-card-title" [title]="t.title">
+                          @if (t.clickupUrl) {
+                            <a [href]="t.clickupUrl" target="_blank" rel="noopener">{{ t.title }}</a>
+                          } @else {
+                            {{ t.title }}
+                          }
+                        </div>
+                        <div class="task-card-bottom">
+                          <span class="task-assignee">{{ t.employeeId ? employeeName(t.employeeId) : 'Unassigned' }}</span>
+                          <div class="task-card-actions">
+                            @if (col.status !== 'todo') {
+                              <button type="button" class="mini-btn" title="Move to To do" (click)="adminSetTaskStatus(t, 'todo')">◀</button>
+                            }
+                            @if (col.status !== 'in_progress') {
+                              <button type="button" class="mini-btn" title="Move to In progress" (click)="adminSetTaskStatus(t, 'in_progress')">{{ col.status === 'todo' ? '▶' : '◀' }}</button>
+                            }
+                            @if (col.status !== 'done') {
+                              <button type="button" class="mini-btn" title="Move to Done" (click)="adminSetTaskStatus(t, 'done')">▶</button>
+                            }
+                            <button type="button" class="mini-btn mini-btn-danger" title="Delete" (click)="deleteTask(t)">✕</button>
+                          </div>
+                        </div>
+                      </div>
+                    } @empty {
+                      <div class="task-column-empty">Nothing here</div>
+                    }
+                  </div>
+                </div>
+              }
+            </div>
+          }
         </div>
       }
 
@@ -2381,6 +2399,133 @@ const DAY_MS = 24 * 60 * 60 * 1000;
       padding: 4rem 1rem;
       color: var(--av-text-faint);
     }
+    .client-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 20px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--av-border);
+    }
+    .client-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--av-surface);
+      border: 1px solid var(--av-border);
+      color: var(--av-text-muted);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .client-chip:hover { border-color: var(--av-gold); }
+    .client-chip.active {
+      background: var(--av-forest);
+      border-color: var(--av-forest);
+      color: #fff;
+    }
+    .client-chip .chip-count {
+      background: rgba(0, 0, 0, 0.12);
+      border-radius: 999px;
+      padding: 1px 7px;
+      font-size: 0.7rem;
+    }
+    .client-chip.active .chip-count { background: rgba(255, 255, 255, 0.2); }
+    .task-board {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(260px, 1fr));
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 900px) {
+      .task-board { grid-template-columns: 1fr; }
+    }
+    .task-column {
+      background: var(--av-surface-2, var(--av-ivory));
+      border: 1px solid var(--av-border);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+    .task-column-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 14px;
+      font-size: 0.8rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: var(--av-text-muted);
+      border-bottom: 1px solid var(--av-border);
+    }
+    .task-column-head[data-status='in_progress'] { color: var(--av-gold-text, var(--av-gold)); }
+    .task-column-head[data-status='done'] { color: var(--av-good, #2e7d5b); }
+    .task-column-body {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 12px;
+      max-height: 560px;
+      overflow-y: auto;
+    }
+    .task-column-empty {
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--av-text-faint);
+      padding: 20px 0;
+    }
+    .task-card {
+      background: var(--av-surface);
+      border: 1px solid var(--av-border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .task-card-top { display: flex; justify-content: space-between; align-items: center; }
+    .source-pill {
+      font-size: 0.62rem;
+      font-weight: 700;
+      color: var(--av-text-faint);
+      border: 1px solid var(--av-border);
+      border-radius: 4px;
+      padding: 1px 5px;
+    }
+    .task-card-title {
+      font-size: 0.85rem;
+      line-height: 1.35;
+      word-break: break-word;
+    }
+    .task-card-title a { color: inherit; text-decoration: underline; text-decoration-color: var(--av-border); }
+    .task-card-bottom {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+    .task-assignee {
+      font-size: 0.72rem;
+      color: var(--av-text-muted);
+      font-weight: 600;
+    }
+    .task-card-actions { display: flex; gap: 4px; }
+    .mini-btn {
+      border: 1px solid var(--av-border);
+      background: var(--av-surface);
+      border-radius: 6px;
+      width: 22px;
+      height: 22px;
+      font-size: 0.7rem;
+      line-height: 1;
+      cursor: pointer;
+      color: var(--av-text-muted);
+    }
+    .mini-btn:hover { border-color: var(--av-gold); color: var(--av-text); }
+    .mini-btn-danger:hover { border-color: var(--av-danger, #a23c30); color: var(--av-danger, #a23c30); }
     .settings-form {
       display: flex;
       flex-direction: column;
@@ -3529,14 +3674,50 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   tasks = signal<WorkTask[]>([]);
   taskFilterEmployee = signal<string>('ALL');
   taskFilterStatus = signal<string>('ALL');
+  taskFilterClient = signal<string>('ALL');
   addTaskOpen = signal(false);
   addTaskForm = { employeeId: '', clientId: '', title: '' };
+
+  /** One chip per client that actually has tasks, plus an "Unassigned" bucket for tasks with no project. */
+  taskClientChips(): { id: string; name: string; count: number }[] {
+    const counts = new Map<string, { name: string; count: number }>();
+    for (const t of this.tasks()) {
+      const key = t.clientId || '__none__';
+      const name = t.clientName || 'No Project';
+      const row = counts.get(key) ?? { name, count: 0 };
+      row.count++;
+      counts.set(key, row);
+    }
+    return Array.from(counts.entries())
+      .map(([id, v]) => ({ id, name: v.name, count: v.count }))
+      .sort((a, b) => b.count - a.count);
+  }
 
   filteredTasks(): WorkTask[] {
     return this.tasks()
       .filter((t) => this.taskFilterEmployee() === 'ALL' || t.employeeId === this.taskFilterEmployee())
       .filter((t) => this.taskFilterStatus() === 'ALL' || t.status === this.taskFilterStatus())
+      .filter((t) => {
+        if (this.taskFilterClient() === 'ALL') return true;
+        const key = t.clientId || '__none__';
+        return key === this.taskFilterClient();
+      })
       .sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  /** Board columns for the currently filtered tasks — a mini ClickUp-style board per client. */
+  taskColumns(): { status: WorkTask['status']; label: string; items: WorkTask[] }[] {
+    const all = this.filteredTasks();
+    return [
+      { status: 'todo' as const, label: 'To Do', items: all.filter((t) => t.status === 'todo') },
+      { status: 'in_progress' as const, label: 'In Progress', items: all.filter((t) => t.status === 'in_progress') },
+      { status: 'done' as const, label: 'Done', items: all.filter((t) => t.status === 'done') },
+    ];
+  }
+
+  async adminSetTaskStatus(task: WorkTask, status: WorkTask['status']): Promise<void> {
+    await this.db.upsertTask({ ...task, status, updatedAt: Date.now() });
+    this.tasks.set(await this.db.getTasks());
   }
 
   taskStatusLabel(status: WorkTask['status']): string {
