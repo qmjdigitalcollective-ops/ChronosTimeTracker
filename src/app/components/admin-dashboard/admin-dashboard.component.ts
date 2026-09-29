@@ -745,6 +745,32 @@ const DAY_MS = 24 * 60 * 60 * 1000;
             <button type="button" class="action-btn" (click)="exportEarningsCSV()">Download Earnings CSV</button>
           </div>
 
+          <div class="metrics-grid" style="margin-bottom: 20px;">
+            <div class="metric-card">
+              <div class="metric-icon"><app-icon name="building" [size]="20" /></div>
+              <div class="metric-info">
+                <span class="metric-label">QMJ Digital Collective — All Clients Combined</span>
+                <span class="metric-value">{{ allClientsTotal().billed | money }}</span>
+                <span class="metric-sub">{{ allClientsTotal().hours | number:'1.0-1' }}h billed across every client · {{ rangeLabel() }}</span>
+              </div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-icon"><app-icon name="wallet" [size]="20" /></div>
+              <div class="metric-info">
+                <span class="metric-label">Team Cost</span>
+                <span class="metric-value">{{ allClientsTotal().teamCost | money }}</span>
+              </div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-icon"><app-icon name="trending" [size]="20" /></div>
+              <div class="metric-info">
+                <span class="metric-label">Total Profit</span>
+                <span class="metric-value" [class.neg]="allClientsTotal().profit < 0">{{ allClientsTotal().profit | money }}</span>
+                <span class="metric-sub">{{ allClientsTotal().margin | number:'1.0-1' }}% margin</span>
+              </div>
+            </div>
+          </div>
+
           <div class="table-wrap">
             <table class="data-table">
               <thead>
@@ -3714,7 +3740,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
   clientEarnings(): ClientEarningsSummary[] {
     const map = new Map<string, ClientEarningsSummary>();
 
-    for (const entry of this.rangeEntries()) {
+    for (const entry of this.payableRangeEntries()) {
       let row = map.get(entry.clientId);
       if (!row) {
         const client = this.clients().find((c) => c.id === entry.clientId);
@@ -3747,6 +3773,16 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     }
 
     return Array.from(map.values()).sort((a, b) => b.billed - a.billed);
+  }
+
+  /** QMJ Digital Collective's total earnings across every client for the selected range. */
+  allClientsTotal(): { hours: number; billed: number; teamCost: number; profit: number; margin: number } {
+    const rows = this.clientEarnings();
+    const billed = rows.reduce((acc, r) => acc + r.billed, 0);
+    const teamCost = rows.reduce((acc, r) => acc + r.teamCost, 0);
+    const hours = rows.reduce((acc, r) => acc + r.totalHours, 0);
+    const profit = billed - teamCost;
+    return { hours, billed, teamCost, profit, margin: billed > 0 ? (profit / billed) * 100 : 0 };
   }
 
   memberClientEarnings(): MemberClientSummary[] {
