@@ -3855,10 +3855,13 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     this.applyPreset('this-period');
     await this.refreshAllData();
     this.cloudTablesReady.set(await this.db.cloudTablesReady());
-    // Keep "who's working" fresh. This used to run every 30 seconds, all day, re-downloading
-    // every table (plus, until the fix above, every screenshot's full image) on every tick —
-    // the real driver behind exceeding the Supabase egress quota, not database size.
-    this.refreshTimer = setInterval(() => this.refreshAllData(), 120000);
+    // Keep "who's working" fresh. This used to call the FULL refresh (nine tables, plus
+    // every screenshot's full image) every 30 seconds, all day — the real driver behind
+    // exceeding the Supabase egress quota. It now only re-fetches the one thing that
+    // actually needs to feel live: current time entries. Everything else (people, clients,
+    // contracts, settings, payouts, approvals, permissions, pauses, tasks) barely changes
+    // minute to minute, and already gets refreshed right after whatever action changed it.
+    this.refreshTimer = setInterval(() => this.refreshLiveEntries(), 60000);
   }
 
   ngOnDestroy(): void {
@@ -3867,6 +3870,11 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
 
   isDateTab(): boolean {
     return ['timesheets', 'approvals', 'tracked', 'earnings', 'payroll'].includes(this.activeTab());
+  }
+
+  /** The lightweight periodic tick — just current time entries, nothing else. */
+  async refreshLiveEntries(): Promise<void> {
+    this.entries.set(await this.db.getTimeEntries().catch(() => this.entries()));
   }
 
   async refreshAllData(): Promise<void> {
