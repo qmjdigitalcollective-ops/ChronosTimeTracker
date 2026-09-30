@@ -1,13 +1,37 @@
 const { app, BrowserWindow, ipcMain, desktopCapturer, powerMonitor } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { autoUpdater } = require('electron-updater');
 
 let mainWindow = null;
+
+// Check GitHub Releases for a newer build, download it quietly in the
+// background, then let the person decide when to install — never installs
+// on its own. So a fix pushed here reaches everyone's desktop app without
+// resending and reinstalling the .exe by hand, but nothing runs unattended.
+// Only matters for an installed build, not `npm run electron` in development.
+function startAutoUpdate() {
+  if (!app.isPackaged) return;
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = false;
+  autoUpdater.on('error', (err) => console.error('Auto-update error:', err));
+  autoUpdater.on('update-downloaded', (info) => {
+    if (mainWindow) mainWindow.webContents.send('update-ready', { version: info?.version });
+  });
+  const check = () => autoUpdater.checkForUpdates().catch((err) => console.error('Update check failed:', err));
+  check();
+  // Also check every couple hours in case the app is left open for days.
+  setInterval(check, 2 * 60 * 60 * 1000);
+}
+
+ipcMain.handle('install-update', () => {
+  autoUpdater.quitAndInstall();
+});
 
 // Auto-pause the timer after this many seconds with no mouse/keyboard activity
 // anywhere on the computer (not just in this window) — a real "stepped away
 // from the desk" signal, which a browser tab alone could never detect.
-const IDLE_THRESHOLD_SECONDS = 180;
+const IDLE_THRESHOLD_SECONDS = 240;
 let wasIdle = false;
 
 function startIdleWatcher() {
@@ -84,6 +108,7 @@ ipcMain.handle('capture-screen', async () => {
 app.whenReady().then(() => {
   createWindow();
   startIdleWatcher();
+  startAutoUpdate();
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

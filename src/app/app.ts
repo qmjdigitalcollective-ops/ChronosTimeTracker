@@ -22,6 +22,7 @@ import { UserRole } from './models/time-tracker.models';
 })
 export class App {
   currentRole = signal<UserRole>('user');
+  updateReady = signal<string | null>(null);
 
   constructor(public authService: AuthService) {
     effect(() => {
@@ -31,6 +32,18 @@ export class App {
         this.currentRole.set('user');
       }
     });
+
+    // Desktop app only: main.js downloads updates quietly in the background
+    // and tells us here once one is ready — nothing installs until the
+    // person clicks Restart below.
+    const api = (window as any).electronAPI;
+    if (api?.isElectron && api.onUpdateReady) {
+      api.onUpdateReady((data: { version?: string }) => this.updateReady.set(data?.version || 'latest'));
+    }
+  }
+
+  installUpdate(): void {
+    (window as any).electronAPI?.installUpdate?.();
   }
 
   onRoleChange(role: UserRole): void {

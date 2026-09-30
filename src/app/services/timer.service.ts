@@ -26,7 +26,7 @@ export class TimerService {
   readonly currentSessionScreenshots = signal<ScreenshotRecord[]>([]);
   readonly todayEntries = signal<TimeEntry[]>([]);
   readonly isTakingScreenshot = signal<boolean>(false);
-  /** True when the current pause was triggered automatically by 2 minutes of
+  /** True when the current pause was triggered automatically by 4 minutes of
    * no mouse/keyboard activity on the computer, not a manual "Pause Shift"
    * click — so the UI can explain why the timer stopped. Desktop app only;
    * a browser tab has no way to see activity outside itself. */
@@ -74,14 +74,14 @@ export class TimerService {
   }
 
   /**
-   * Website version: pause after 3 minutes with no activity and show a system
+   * Website version: pause after 4 minutes with no activity and show a system
    * notification that brings them back. Uses Chrome's Idle Detection API when
    * allowed (sees the whole computer); otherwise falls back to activity inside
    * this tab, and only while the tab is visible — a hidden tab can't tell
    * "away" from "working in another app".
    */
   private watchIdleInBrowser(): void {
-    const IDLE_SECONDS = 180;
+    const IDLE_SECONDS = 240;
     let lastActivity = Date.now();
     const touch = () => (lastActivity = Date.now());
     for (const ev of ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'wheel']) {
@@ -126,7 +126,7 @@ export class TimerService {
   private notifyIdle(): void {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     const n = new Notification('Your timer was paused', {
-      body: 'No activity for 3 minutes. Click to go back and press Resume.',
+      body: 'No activity for 4 minutes. Click to go back and press Resume.',
       requireInteraction: true,
     });
     n.onclick = () => {

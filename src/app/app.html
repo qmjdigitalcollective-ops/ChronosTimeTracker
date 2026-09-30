@@ -1,4 +1,10 @@
 <div class="app-layout">
+  @if (updateReady()) {
+    <div class="update-banner">
+      <span>A new version ({{ updateReady() }}) is ready.</span>
+      <button type="button" (click)="installUpdate()">Restart to install</button>
+    </div>
+  }
   @if (!authService.isLoggedIn()) {
     <app-login></app-login>
   } @else {

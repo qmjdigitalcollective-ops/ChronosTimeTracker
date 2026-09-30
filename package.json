@@ -12,9 +12,12 @@
     "build:desktop": "ng build --base-href ./ --output-path dist/desktop",
     "desktop": "npm run build:desktop && electron .",
     "dist:mac": "npm run build:desktop && electron-builder --mac",
-    "dist:win": "npm run build:desktop && electron-builder --win"
+    "dist:win": "npm run build:desktop && electron-builder --win",
+    "publish:win": "npm run build:desktop && electron-builder --win --x64 --publish always"
   },
   "private": true,
+  "description": "Auravia Collective time tracker",
+  "author": "Auravia Collective",
   "packageManager": "npm@11.17.0",
   "dependencies": {
     "@angular/common": "^22.1.0",
@@ -24,6 +27,7 @@
     "@angular/platform-browser": "^22.1.0",
     "@angular/router": "^22.1.0",
     "@supabase/supabase-js": "^2.116.0",
+    "electron-updater": "^6.8.9",
     "rxjs": "~7.8.0",
     "tslib": "^2.3.0"
   },
@@ -56,6 +60,11 @@
     },
     "directories": {
       "output": "release"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "qmjdigitalcollective-ops",
+      "repo": "ChronosTimeTracker"
     }
   }
 }
