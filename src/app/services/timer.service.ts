@@ -438,7 +438,16 @@ export class TimerService {
 
   async captureScreenshot(): Promise<ScreenshotRecord | null> {
     const entry = this.activeEntry();
-    if (!entry || !this.screenshotsAllowed) return null;
+    if (!entry) return null;
+
+    // Re-check the live permission right before capturing — screenshotsAllowed
+    // was only set at clock-in, so an admin turning it off mid-session had no
+    // effect until the person clocked out and back in.
+    try {
+      const me = await this.db.getEmployeeById(entry.employeeId);
+      this.screenshotsAllowed = effectivePermissions(await this.db.getPermissions(), me).screenshots;
+    } catch {}
+    if (!this.screenshotsAllowed) return null;
 
     this.isTakingScreenshot.set(true);
 
