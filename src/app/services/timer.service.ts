@@ -320,6 +320,12 @@ export class TimerService {
     const entry = this.activeEntry();
     if (!entry || this.status() !== 'active') return;
 
+    // Flip the status synchronously, before any `await` — two idle triggers
+    // landing a moment apart (the system-wide IdleDetector and the in-tab
+    // fallback both firing) used to both pass the guard above and each
+    // create their own pause record, because status only flipped to
+    // 'paused' after the save had already gone out.
+    this.status.set('paused');
     this.stopTicker();
     const now = Date.now() - awaySeconds * 1000;
 
@@ -341,7 +347,6 @@ export class TimerService {
     await this.db.saveTimeEntry(entry);
     this.db.savePause(pause).catch(() => {});
     this.activeEntry.set(entry);
-    this.status.set('paused');
   }
 
   async resume(): Promise<void> {
