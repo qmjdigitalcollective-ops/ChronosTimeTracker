@@ -382,6 +382,13 @@ export class TimerService {
     const entry = this.activeEntry();
     if (!entry || this.status() !== 'paused') return;
 
+    // Same fix as pause(): flip the status before any `await` so a second
+    // resume() landing a moment later (a double-click, or auto-resume firing
+    // again on the next mousemove before the first call's status update had
+    // gone out) sees 'active' already and backs off, instead of both calls
+    // racing through the same pause-closing and paused-seconds math.
+    this.status.set('active');
+
     const now = Date.now();
     let pause = this.currentPause();
     if (!pause) {
@@ -404,7 +411,6 @@ export class TimerService {
     entry.status = 'active';
     await this.db.saveTimeEntry(entry);
     this.activeEntry.set(entry);
-    this.status.set('active');
     this.pausedForIdle.set(false);
 
     this.startTicker();
