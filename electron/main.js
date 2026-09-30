@@ -7,7 +7,7 @@ let mainWindow = null;
 // Auto-pause the timer after this many seconds with no mouse/keyboard activity
 // anywhere on the computer (not just in this window) — a real "stepped away
 // from the desk" signal, which a browser tab alone could never detect.
-const IDLE_THRESHOLD_SECONDS = 120;
+const IDLE_THRESHOLD_SECONDS = 180;
 let wasIdle = false;
 
 function startIdleWatcher() {
