@@ -61,7 +61,10 @@ export class TimerService {
    */
   private autoResumeIfIdle(): void {
     if (this.status() !== 'paused') return;
-    if ((this.currentPause()?.reason ?? 'idle') !== 'idle') return;
+    // Only auto-resume when we're sure this was an idle auto-pause, not a
+    // manually chosen one — if the reason isn't known yet (e.g. still
+    // loading right after a reload), do nothing rather than guess.
+    if (this.currentPause()?.reason !== 'idle') return;
     this.resume();
   }
 
@@ -204,6 +207,13 @@ export class TimerService {
           // Display only — resume() adds the full paused stretch once; saving it here as well
           // counted the same pause twice.
           paused += Math.max(0, Math.floor((now - active.lastPauseTime) / 1000));
+
+          // Restore *why* it's paused — without this, a reload while on a
+          // manually chosen pause (Break, Meeting, etc.) forgot the reason,
+          // and the very next mouse move auto-resumed it as if it had been
+          // an idle auto-pause, silently overriding the manual pause.
+          const open = (await this.db.getPauses(active.id).catch(() => [] as TimePause[])).filter((p) => !p.endedAt);
+          this.currentPause.set(open[open.length - 1] ?? null);
         }
 
         this.elapsedSeconds.set(totalElapsed);
