@@ -50,6 +50,21 @@ export class TimerService {
     this.watchIdle();
   }
 
+  /**
+   * If the timer is sitting paused only because the idle-detector auto-paused
+   * it (never for a manually chosen pause reason like lunch/meeting — those
+   * still need a deliberate click), pick it back up the moment real activity
+   * is seen again. A pause that's left waiting on a manual click used to
+   * silently keep counting as "away" for however long it took someone to
+   * notice and click Resume, which made a real few-minutes idle gap look
+   * like an hour-plus away.
+   */
+  private autoResumeIfIdle(): void {
+    if (this.status() !== 'paused') return;
+    if ((this.currentPause()?.reason ?? 'idle') !== 'idle') return;
+    this.resume();
+  }
+
   /** Auto-pause after 2 minutes away from the keyboard/mouse (desktop app only). */
   private watchIdle(): void {
     const api = (window as any).electronAPI;
@@ -66,10 +81,8 @@ export class TimerService {
     });
 
     api.onIdleEnded(() => {
-      // Coming back doesn't auto-resume the clock — the person still has to
-      // press Resume themselves, same as a manual pause, so idle time never
-      // gets counted just because they walked back to their desk.
       this.pausedForIdle.set(false);
+      this.autoResumeIfIdle();
     });
   }
 
@@ -83,7 +96,10 @@ export class TimerService {
   private watchIdleInBrowser(): void {
     const IDLE_SECONDS = 240;
     let lastActivity = Date.now();
-    const touch = () => (lastActivity = Date.now());
+    const touch = () => {
+      lastActivity = Date.now();
+      this.autoResumeIfIdle();
+    };
     for (const ev of ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'wheel']) {
       window.addEventListener(ev, touch, { passive: true });
     }
@@ -104,7 +120,10 @@ export class TimerService {
         const detector = new Detector();
         detector.addEventListener('change', () => {
           if (detector.userState === 'idle' || detector.screenState === 'locked') goIdle(IDLE_SECONDS);
-          else this.pausedForIdle.set(false);
+          else {
+            this.pausedForIdle.set(false);
+            this.autoResumeIfIdle();
+          }
         });
         await detector.start({ threshold: IDLE_SECONDS * 1000 });
         this.systemIdleWatching = true;
@@ -126,7 +145,7 @@ export class TimerService {
   private notifyIdle(): void {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     const n = new Notification('Your timer was paused', {
-      body: 'No activity for 4 minutes. Click to go back and press Resume.',
+      body: 'No activity for 4 minutes. It will resume on its own as soon as you start working again.',
       requireInteraction: true,
     });
     n.onclick = () => {

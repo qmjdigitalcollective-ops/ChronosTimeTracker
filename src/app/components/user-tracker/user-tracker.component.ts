@@ -144,7 +144,7 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
                 <span class="paused-text">• On pause: {{ pauseLabel(cp.reason) }}</span>
               }
               @if (timerService.pausedForIdle()) {
-                <span class="paused-text">• Paused automatically — no activity for a few minutes. Press Resume when you're back</span>
+                <span class="paused-text">• Paused automatically — no activity for a few minutes. It'll pick back up on its own once you start working again</span>
               }
             } @else {
               <span class="idle-text">Choose a project and task, then start tracking</span>
