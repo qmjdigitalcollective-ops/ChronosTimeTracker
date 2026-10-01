@@ -53,6 +53,11 @@ export interface TimeEntry {
   lastPauseTime?: number; // Epoch ms when paused
   /** Only set on entries a team member added themselves (not a real clock-in) — needs admin sign-off. */
   approvalStatus?: 'pending' | 'approved' | 'rejected';
+  /** Which device's ticker is allowed to actively tick and autosave this entry. */
+  ownerDeviceId?: string;
+  /** Epoch ms of the owning device's last heartbeat — a second device uses this to tell a
+   * live owner (recently ticking) apart from a dead one (owner's app closed/crashed). */
+  lastTickAt?: number;
 }
 
 /** IDs of team-member-submitted manual entries — distinct from admin's own MANUAL_ENTRY_PREFIX

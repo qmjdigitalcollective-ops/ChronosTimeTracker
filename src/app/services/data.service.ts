@@ -111,6 +111,8 @@ function toTimeEntry(r: Row): TimeEntry {
     screenshotCount: Number(r['screenshot_count'] ?? 0),
     lastPauseTime: num(r['last_pause_time']),
     approvalStatus: r['approval_status'] as TimeEntry['approvalStatus'],
+    ownerDeviceId: (r['owner_device_id'] as string) ?? undefined,
+    lastTickAt: num(r['last_tick_at']),
   };
 }
 
@@ -133,6 +135,8 @@ function fromTimeEntry(e: TimeEntry): Row {
     screenshot_count: e.screenshotCount,
     last_pause_time: e.lastPauseTime ?? null,
     approval_status: e.approvalStatus ?? null,
+    owner_device_id: e.ownerDeviceId ?? null,
+    last_tick_at: e.lastTickAt ?? null,
   };
 }
 

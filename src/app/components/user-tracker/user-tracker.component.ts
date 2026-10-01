@@ -152,9 +152,21 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
           </div>
         </div>
 
+        @if (timerService.trackedElsewhere()) {
+          <div class="device-conflict-banner">
+            <span>This timer is already running on your other device — showing it here read-only so the two don't overwrite each other.</span>
+            <button type="button" class="btn-take-over" (click)="timerService.takeOverDevice()">
+              Take over here
+            </button>
+          </div>
+        }
+
         <!-- Control Action Buttons -->
         <div class="actions-row">
-          @if (timerService.status() === 'completed') {
+          @if (timerService.trackedElsewhere()) {
+            <!-- Read-only: Pause/Resume/Clock Out are hidden until this device takes over,
+                 so this tab can't also save over the device actually driving the timer. -->
+          } @else if (timerService.status() === 'completed') {
             <button
               type="button"
               class="btn btn-clock-in"
@@ -771,6 +783,31 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
     .idle-text {
       color: var(--av-text-faint);
       font-size: 0.85rem;
+    }
+    .device-conflict-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      background: var(--av-amber-bg, rgba(217, 160, 40, 0.1));
+      border: 1px solid var(--av-amber-text);
+      color: var(--av-amber-text);
+      border-radius: 10px;
+      padding: 0.6rem 0.9rem;
+      font-size: 0.85rem;
+      margin-bottom: 0.75rem;
+    }
+    .btn-take-over {
+      flex-shrink: 0;
+      background: none;
+      border: 1px solid var(--av-amber-text);
+      color: var(--av-amber-text);
+      border-radius: 8px;
+      padding: 0.3rem 0.7rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
     }
     .actions-row {
       display: flex;

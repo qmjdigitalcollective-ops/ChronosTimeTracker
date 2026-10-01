@@ -36,6 +36,36 @@ export class TimerService {
   /** The pause currently in progress (why the timer is stopped) */
   readonly currentPause = signal<TimePause | null>(null);
 
+  /** True when this device opened an entry that's actively being ticked/saved by a
+   * DIFFERENT device right now — so this one shows it read-only instead of also
+   * ticking, which used to make two devices silently overwrite each other's numbers
+   * every ~30 seconds until whichever saved last "won". */
+  readonly trackedElsewhere = signal<boolean>(false);
+
+  /** A random id for this browser/app install, persisted so it's stable across reloads.
+   * Used only to tell "is this device the one driving the timer right now" apart from
+   * "is some other device driving it" — never sent anywhere beyond our own database. */
+  private readonly deviceId: string = (() => {
+    try {
+      const key = 'auravia_device_id';
+      let id = localStorage.getItem(key);
+      if (!id) {
+        id = 'dev_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem(key, id);
+      }
+      return id;
+    } catch {
+      // Private window / blocked storage — fall back to a per-session id. Worst case,
+      // this tab's own reloads look like "another device", which just makes it
+      // read-only for itself rather than causing any data loss.
+      return 'dev_' + Math.random().toString(36).slice(2, 10);
+    }
+  })();
+
+  /** A live owner's heartbeat (lastTickAt) older than this is treated as dead —
+   * that device's app was closed/crashed, so it's safe to take over automatically. */
+  private static readonly OWNER_STALE_MS = 90_000;
+
   private tickerIntervalId: any = null;
   /** Team Access → "Screenshots" for the person whose timer is running */
   private screenshotsAllowed = true;
@@ -219,6 +249,7 @@ export class TimerService {
       this.pausedForIdle.set(false);
       this.currentPause.set(null);
       this.currentSessionScreenshots.set([]);
+      this.trackedElsewhere.set(false);
     }
 
     try {
@@ -242,7 +273,35 @@ export class TimerService {
           // If was active when closed/refreshed, compute elapsed since startTime minus paused
           const wallClockSeconds = Math.max(0, Math.floor((now - active.startTime) / 1000));
           totalElapsed = Math.max(active.durationSeconds, wallClockSeconds - paused);
-          this.startTicker();
+
+          // Is a DIFFERENT device already ticking this entry right now? If its last
+          // heartbeat is recent, it's genuinely live — don't also tick here, or the
+          // two devices just silently overwrite each other's numbers every ~30s
+          // (this is exactly what happened when the same account was open on two
+          // devices: one showed 57:04, the other 19:41, each one "winning" in turns).
+          const ownedByOther = !!active.ownerDeviceId && active.ownerDeviceId !== this.deviceId;
+          const otherIsLive = ownedByOther && now - (active.lastTickAt ?? 0) < TimerService.OWNER_STALE_MS;
+
+          if (otherIsLive) {
+            // Someone else (possibly even a "Take over" on another device) now owns
+            // it — stop ticking here immediately rather than waiting for this
+            // device's own next 30-second checkpoint to notice.
+            this.stopTicker();
+            this.trackedElsewhere.set(true);
+          } else if (this.tickerIntervalId && active.ownerDeviceId === this.deviceId) {
+            // Already ours and already ticking — this call is just a realtime notification
+            // (e.g. this same entry's own heartbeat landing, or someone else's unrelated
+            // entry changing). Restarting the ticker here would reset its 30-second save
+            // window every time, so the duration would never actually get persisted.
+            this.trackedElsewhere.set(false);
+          } else {
+            // No live owner elsewhere, and we're not already ticking — claim it and start.
+            this.trackedElsewhere.set(false);
+            active.ownerDeviceId = this.deviceId;
+            active.lastTickAt = now;
+            this.db.saveTimeEntry(active).catch(() => {});
+            this.startTicker();
+          }
         } else if (active.status === 'paused' && active.lastPauseTime) {
           // Add extra paused time while page was away
           // Display only — resume() adds the full paused stretch once; saving it here as well
@@ -278,10 +337,26 @@ export class TimerService {
         this.pausedForIdle.set(false);
         this.currentPause.set(null);
         this.currentSessionScreenshots.set([]);
+        this.trackedElsewhere.set(false);
       }
     } catch (e) {
       console.error('Failed to restore active time session:', e);
     }
+  }
+
+  /** Explicitly claim the running timer on THIS device, even though another device's
+   * heartbeat still looks live (e.g. that other device is unreachable — closed laptop,
+   * phone with no signal — not actually gone, just not quitting cleanly). A normal stale
+   * handover (owner's app closed) happens automatically on the next restore; this is only
+   * for the rarer case of consciously overriding a still-live owner. */
+  async takeOverDevice(): Promise<void> {
+    const entry = this.activeEntry();
+    if (!entry) return;
+    entry.ownerDeviceId = this.deviceId;
+    entry.lastTickAt = Date.now();
+    await this.db.saveTimeEntry(entry).catch(() => {});
+    this.trackedElsewhere.set(false);
+    if (entry.status === 'active') this.startTicker();
   }
 
   async loadTodayEntries(): Promise<void> {
@@ -372,6 +447,8 @@ export class TimerService {
       hourlyRate,
       totalPay: 0,
       screenshotCount: 0,
+      ownerDeviceId: this.deviceId,
+      lastTickAt: now,
     };
 
     await this.db.saveTimeEntry(newEntry);
@@ -379,6 +456,7 @@ export class TimerService {
     this.status.set('active');
     this.elapsedSeconds.set(0);
     this.pausedSeconds.set(0);
+    this.trackedElsewhere.set(false);
     this.nextScreenshotSeconds.set(this.intervalMinutes * 60);
     this.currentSessionScreenshots.set([]);
 
@@ -459,9 +537,13 @@ export class TimerService {
     }
 
     entry.status = 'active';
+    // Clicking Resume here is a deliberate action on this device — it becomes the driver.
+    entry.ownerDeviceId = this.deviceId;
+    entry.lastTickAt = now;
     await this.db.saveTimeEntry(entry);
     this.activeEntry.set(entry);
     this.pausedForIdle.set(false);
+    this.trackedElsewhere.set(false);
 
     this.startTicker();
   }
@@ -616,8 +698,29 @@ export class TimerService {
         if (nextElapsed - this.lastPersistedSeconds >= 30 && this.activeEntry()) {
           this.lastPersistedSeconds = nextElapsed;
           const entry = this.activeEntry()!;
+
+          // Before writing, make sure nobody else took over since our last tick — without
+          // this check, two devices that both believe they own the entry would just hand
+          // ownership back and forth every 30 seconds forever instead of one backing off.
+          const latest = await this.db.getTimeEntryById(entry.id).catch(() => null);
+          if (
+            latest &&
+            latest.ownerDeviceId &&
+            latest.ownerDeviceId !== this.deviceId &&
+            (latest.lastTickAt ?? 0) > (entry.lastTickAt ?? 0)
+          ) {
+            this.stopTicker();
+            this.trackedElsewhere.set(true);
+            return;
+          }
+
           entry.durationSeconds = nextElapsed;
           entry.totalPay = (nextElapsed / 3600) * entry.hourlyRate;
+          // Heartbeat: proves THIS device is the live one, so another device
+          // that's also open stays read-only instead of ticking in parallel.
+          entry.ownerDeviceId = this.deviceId;
+          entry.lastTickAt = Date.now();
+          this.activeEntry.set({ ...entry });
           this.db.saveTimeEntry(entry).catch(() => {});
         }
 
