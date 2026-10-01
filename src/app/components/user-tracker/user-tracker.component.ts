@@ -1721,7 +1721,14 @@ export class UserTrackerComponent implements OnInit {
     const allowAll = effectivePermissions(await this.db.getPermissions(), me).allProjects;
     const list = allowAll || mine.size === 0 ? all : all.filter((c) => mine.has(c.id));
     this.clients.set(list);
-    if (list.length > 0 && !list.some((c) => c.id === this.selectedClientId())) {
+    // If a session is already running (restored above, before this resolves), show the
+    // project it's actually tracking — not the first project in the list. Without this,
+    // the dropdown silently showed "Entry Level" under a running Laphont session, which
+    // looked like the wrong project was selected even though the saved entry was correct.
+    const activeClientId = this.timerService.activeEntry()?.clientId;
+    if (activeClientId && list.some((c) => c.id === activeClientId)) {
+      this.selectedClientId.set(activeClientId);
+    } else if (list.length > 0 && !list.some((c) => c.id === this.selectedClientId())) {
       this.selectedClientId.set(list[0].id);
     }
   }
