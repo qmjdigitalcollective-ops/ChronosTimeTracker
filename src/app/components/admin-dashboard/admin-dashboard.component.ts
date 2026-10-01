@@ -269,10 +269,15 @@ const DAY_MS = 24 * 60 * 60 * 1000;
         </div>
       }
 
-      <!-- MY TIMER (your own time tracking) -->
-      @if (activeTab() === 'tracker') {
+      <!-- MY TIMER (your own time tracking) — kept alive and just hidden when
+           not the active tab, instead of being torn down and rebuilt every
+           time you switch away and back. Destroying it used to flash a
+           genuinely running timer to 00:00 for a moment, and silently reset
+           any in-progress project/task selection back to the first project
+           in the list. -->
+      <div [hidden]="activeTab() !== 'tracker'">
         <app-user-tracker />
-      }
+      </div>
 
       @if (isDateTab()) {
       <!-- Pay Period / Date Range Picker -->
