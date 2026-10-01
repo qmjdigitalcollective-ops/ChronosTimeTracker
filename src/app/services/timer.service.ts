@@ -486,13 +486,13 @@ export class TimerService {
    * rollback needed — the old approach flipped the screen first and hoped the save
    * would land, which could leave someone staring at "Paused" for a save that failed
    * and a database that still said "Active" the next time it was checked. */
-  private pauseResumeInFlight = false;
+  readonly pauseResumeInFlight = signal(false);
 
   /** `awaySeconds`: how long the person was already idle — that stretch isn't counted as work. */
   async pause(reason: PauseReason = 'other', awaySeconds = 0): Promise<void> {
     const entry = this.activeEntry();
-    if (!entry || this.status() !== 'active' || this.pauseResumeInFlight) return;
-    this.pauseResumeInFlight = true;
+    if (!entry || this.status() !== 'active' || this.pauseResumeInFlight()) return;
+    this.pauseResumeInFlight.set(true);
 
     try {
       const now = Date.now() - awaySeconds * 1000;
@@ -514,23 +514,30 @@ export class TimerService {
         startedAt: now,
       };
 
-      // Only once the database confirms this did the screen ever say "Paused".
-      await this.db.saveTimeEntry(updated);
-      this.db.savePause(pause).catch(() => {});
-
+      // Stop heartbeats first so none can land after (and overwrite) the paused save.
       this.stopTicker();
+      try {
+        // Only once the database confirms this did the screen ever say "Paused".
+        // The pause row is awaited too, so a realtime restore can't run before it exists
+        // and wipe the pause reason.
+        await Promise.all([this.db.saveTimeEntry(updated), this.db.savePause(pause).catch(() => {})]);
+      } catch (e) {
+        this.startTicker();
+        throw e;
+      }
+
       this.currentPause.set(pause);
       this.activeEntry.set(updated);
       this.status.set('paused');
     } finally {
-      this.pauseResumeInFlight = false;
+      this.pauseResumeInFlight.set(false);
     }
   }
 
   async resume(): Promise<void> {
     const entry = this.activeEntry();
-    if (!entry || this.status() !== 'paused' || this.pauseResumeInFlight) return;
-    this.pauseResumeInFlight = true;
+    if (!entry || this.status() !== 'paused' || this.pauseResumeInFlight()) return;
+    this.pauseResumeInFlight.set(true);
 
     try {
       const now = Date.now();
@@ -570,7 +577,7 @@ export class TimerService {
 
       this.startTicker();
     } finally {
-      this.pauseResumeInFlight = false;
+      this.pauseResumeInFlight.set(false);
     }
   }
 
@@ -729,12 +736,16 @@ export class TimerService {
         // Persist the current duration about every 30 seconds
         if (nextElapsed - this.lastPersistedSeconds >= 30 && this.activeEntry()) {
           this.lastPersistedSeconds = nextElapsed;
-          const entry = this.activeEntry()!;
+          const entryId = this.activeEntry()!.id;
 
           // Before writing, make sure nobody else took over since our last tick — without
           // this check, two devices that both believe they own the entry would just hand
           // ownership back and forth every 30 seconds forever instead of one backing off.
-          const latest = await this.db.getTimeEntryById(entry.id).catch(() => null);
+          const latest = await this.db.getTimeEntryById(entryId).catch(() => null);
+          // Paused/clocked out while that read was in flight — saving now would write the
+          // stale "active" entry over the pause and make it snap back.
+          const entry = this.activeEntry();
+          if (this.status() !== 'active' || this.pauseResumeInFlight() || !entry || entry.id !== entryId) return;
           if (
             latest &&
             latest.ownerDeviceId &&
