@@ -195,19 +195,31 @@ export class TimerService {
   }
 
   /** Restore the signed-in person's own running/paused timer (if any). */
+  private lastRestoredEmployeeId: string | null = null;
+
   async restoreActiveSession(employeeId: string): Promise<void> {
-    // Reset whatever the previous person on this device had loaded
-    if (this.tickerIntervalId) {
-      clearInterval(this.tickerIntervalId);
-      this.tickerIntervalId = null;
+    // Only hard-reset the display when a DIFFERENT person is loading on this
+    // device (so one person never sees another's leftover timer). Doing this
+    // unconditionally used to flash the running timer to 00:00 for a moment
+    // every single time this component remounted — e.g. switching to another
+    // tab and back — even though nothing had actually changed. For the same
+    // person, just keep showing what's already on screen until the fresh
+    // read below confirms (or corrects) it.
+    const isSamePerson = employeeId === this.lastRestoredEmployeeId;
+    this.lastRestoredEmployeeId = employeeId;
+    if (!isSamePerson) {
+      if (this.tickerIntervalId) {
+        clearInterval(this.tickerIntervalId);
+        this.tickerIntervalId = null;
+      }
+      this.activeEntry.set(null);
+      this.status.set('completed');
+      this.elapsedSeconds.set(0);
+      this.pausedSeconds.set(0);
+      this.pausedForIdle.set(false);
+      this.currentPause.set(null);
+      this.currentSessionScreenshots.set([]);
     }
-    this.activeEntry.set(null);
-    this.status.set('completed');
-    this.elapsedSeconds.set(0);
-    this.pausedSeconds.set(0);
-    this.pausedForIdle.set(false);
-    this.currentPause.set(null);
-    this.currentSessionScreenshots.set([]);
 
     try {
       const settings = await this.db.getSettings();
@@ -251,6 +263,21 @@ export class TimerService {
         // Load screenshots for this session
         const screenshots = await this.db.getScreenshots(active.id);
         this.currentSessionScreenshots.set(screenshots);
+      } else if (isSamePerson) {
+        // No active entry after all (e.g. clocked out from another device) —
+        // the reset at the top was skipped for this same person, so clear it
+        // here instead, now that we actually know there's nothing running.
+        if (this.tickerIntervalId) {
+          clearInterval(this.tickerIntervalId);
+          this.tickerIntervalId = null;
+        }
+        this.activeEntry.set(null);
+        this.status.set('completed');
+        this.elapsedSeconds.set(0);
+        this.pausedSeconds.set(0);
+        this.pausedForIdle.set(false);
+        this.currentPause.set(null);
+        this.currentSessionScreenshots.set([]);
       }
     } catch (e) {
       console.error('Failed to restore active time session:', e);
