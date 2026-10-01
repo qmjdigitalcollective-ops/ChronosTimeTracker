@@ -1,5 +1,6 @@
 import { Injectable, signal } from '@angular/core';
 import { DataService } from './data.service';
+import { RealtimeService } from './realtime.service';
 import { Employee } from '../models/time-tracker.models';
 
 /** Prefix for a per-device, per-employee flag: "this device already confirmed its own PIN." */
@@ -56,7 +57,10 @@ export class AuthService {
     } catch {}
   }
 
-  constructor(private db: DataService) {
+  constructor(
+    private db: DataService,
+    private realtime: RealtimeService
+  ) {
     this.restoreSession();
   }
 
@@ -87,6 +91,7 @@ export class AuthService {
     try {
       const result = await this.db.login({ employeeId, pin });
       this.applyLogin(result.employee, result.isAdmin);
+      void this.realtime.setSession(result.supabaseSession);
       return { success: true, message: `Welcome back, ${result.employee.name}!` };
     } catch (e) {
       return { success: false, message: (e as Error).message || 'Invalid employee PIN code.' };
@@ -104,6 +109,7 @@ export class AuthService {
         ? await this.db.login({ email: typed, pin })
         : await this.db.login({ employeeId: typed, pin });
       this.applyLogin(result.employee, result.isAdmin);
+      void this.realtime.setSession(result.supabaseSession);
       return { success: true, message: `Welcome back, ${result.employee.name}!` };
     } catch (e) {
       return { success: false, message: (e as Error).message || 'Email or Employee ID not found. Please check and try again.' };
@@ -114,6 +120,7 @@ export class AuthService {
     try {
       const result = await this.db.loginAdmin(pin);
       this.applyLogin(result.employee, true);
+      void this.realtime.setSession(result.supabaseSession);
       return { success: true, message: 'Admin authenticated successfully!' };
     } catch (e) {
       return { success: false, message: (e as Error).message || 'Incorrect Admin PIN. Access denied.' };
@@ -169,6 +176,7 @@ export class AuthService {
     this.isLoggedIn.set(false);
     this.isAdmin.set(false);
     this.mustChangePin.set(false);
+    this.realtime.clearSession();
     this.db.logout().catch(() => {
       /* the local session is already gone either way */
     });

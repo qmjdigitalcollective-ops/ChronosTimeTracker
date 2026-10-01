@@ -33,6 +33,7 @@ import { IconComponent } from '../icon/icon.component';
 import { UserTrackerComponent } from '../user-tracker/user-tracker.component';
 import { PayslipComponent } from '../payslip/payslip.component';
 import { NavService } from '../../services/nav.service';
+import { RealtimeService } from '../../services/realtime.service';
 import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pay-period';
 
 type AdminTab =
@@ -3819,7 +3820,8 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     private db: DataService,
     public timerService: TimerService,
     public authService: AuthService,
-    private nav: NavService
+    private nav: NavService,
+    private realtime: RealtimeService
   ) {
     // The top bar can ask to open a page (e.g. clicking the running timer opens My Timer)
     effect(() => {
@@ -3857,6 +3859,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     // Bring back my own running timer (so the top-bar timer shows on every page)
     const me = this.authService.currentUser();
     if (me && this.timerService.status() === 'completed') await this.timerService.restoreActiveSession(me.id);
+    if (me) this.timerService.watchLiveUpdates(me.id);
     this.applyPreset('this-period');
     await this.refreshAllData();
     this.cloudTablesReady.set(await this.db.cloudTablesReady());
@@ -3866,8 +3869,14 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     // actually needs to feel live: current time entries. Everything else (people, clients,
     // contracts, settings, payouts, approvals, permissions, pauses, tasks) barely changes
     // minute to minute, and already gets refreshed right after whatever action changed it.
+    // Realtime (below) pushes updates the instant they happen — someone clocking in,
+    // pausing, or out on another device shows up right away — and this poll just stays on
+    // as a quiet safety net in case a Realtime connection ever drops.
     this.refreshTimer = setInterval(() => this.refreshLiveEntries(), 60000);
+    this.unwatchLiveEntries = this.realtime.onTimeEntriesChange(() => this.refreshLiveEntries());
   }
+
+  private unwatchLiveEntries: (() => void) | null = null;
 
   private readonly SNAPSHOT_KEY = 'auravia_admin_snapshot_v1';
 
@@ -3907,6 +3916,7 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
 
   ngOnDestroy(): void {
     if (this.refreshTimer) clearInterval(this.refreshTimer);
+    this.unwatchLiveEntries?.();
   }
 
   isDateTab(): boolean {

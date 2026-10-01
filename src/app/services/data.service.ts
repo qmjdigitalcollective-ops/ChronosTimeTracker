@@ -311,6 +311,8 @@ function fromApproval(a: TimesheetApproval): Row {
 export interface LoginResult {
   employee: Employee;
   isAdmin: boolean;
+  /** Mints a real Supabase session for Realtime (see RealtimeService) — not present on `whoami`. */
+  supabaseSession?: { access_token: string; refresh_token: string } | null;
 }
 
 @Injectable({ providedIn: 'root' })
@@ -389,13 +391,13 @@ export class DataService {
   async login(opts: { employeeId?: string; email?: string; pin: string }): Promise<LoginResult> {
     const res = await this.call({ op: 'login', ...opts });
     this.setToken(res.token);
-    return { employee: toEmployee(res.employee), isAdmin: !!res.isAdmin };
+    return { employee: toEmployee(res.employee), isAdmin: !!res.isAdmin, supabaseSession: res.supabaseSession ?? null };
   }
 
   async loginAdmin(pin: string): Promise<LoginResult> {
     const res = await this.call({ op: 'login_admin', pin });
     this.setToken(res.token);
-    return { employee: toEmployee(res.employee), isAdmin: !!res.isAdmin };
+    return { employee: toEmployee(res.employee), isAdmin: !!res.isAdmin, supabaseSession: res.supabaseSession ?? null };
   }
 
   /** Silently restores a session from a stored token, if it's still valid. Never throws. */

@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { FormatDurationPipe } from './pipes/format-duration.pipe';
 import { AuthService } from './services/auth.service';
+import { RealtimeService } from './services/realtime.service';
 import { DataService, LoginResult } from './services/data.service';
+
+class MockRealtimeService {
+  async setSession(): Promise<void> {}
+  clearSession(): void {}
+}
 import { Employee, AppSettings } from './models/time-tracker.models';
 
 // Mock localStorage if in node test environment
@@ -142,7 +148,7 @@ describe('AuthService', () => {
   beforeEach(async () => {
     localStorage.clear();
     mockStorage = new MockDataService();
-    authService = new AuthService(mockStorage);
+    authService = new AuthService(mockStorage, new MockRealtimeService() as unknown as RealtimeService);
     await authService.restoreSession();
   });
 
@@ -230,7 +236,7 @@ describe('AuthService', () => {
     john.pin = 'john23';
 
     // A brand new AuthService (e.g. reopening the app tomorrow) signs in fresh.
-    const secondSession = new AuthService(mockStorage);
+    const secondSession = new AuthService(mockStorage, new MockRealtimeService() as unknown as RealtimeService);
     const login = await secondSession.loginUser('emp-2', 'john23');
     expect(login.success).toBe(true);
     // Bug (before the fix): this would be true again, endlessly re-prompting.

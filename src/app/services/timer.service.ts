@@ -1,6 +1,7 @@
 import { Injectable, signal } from '@angular/core';
 import { DataService } from './data.service';
 import { ScreenshotService } from './screenshot.service';
+import { RealtimeService } from './realtime.service';
 import { payRateFor } from './rates';
 import { effectivePermissions } from './permissions';
 import {
@@ -42,12 +43,40 @@ export class TimerService {
 
   constructor(
     private db: DataService,
-    private screenshotService: ScreenshotService
+    private screenshotService: ScreenshotService,
+    private realtime: RealtimeService
   ) {
     // The running timer is restored per signed-in person (see restoreActiveSession),
     // so one person never picks up someone else's timer.
     this.loadTodayEntries();
     this.watchIdle();
+  }
+
+  private watchingEmployeeId: string | null = null;
+  private unwatchRealtime: (() => void) | null = null;
+  private realtimeDebounce: any = null;
+
+  /**
+   * Call once a person is signed in and their timer has been restored, so a
+   * pause/resume/clock-out made on another tab or device shows up here right
+   * away instead of waiting for the next poll. Safe to call repeatedly —
+   * re-subscribing for the same person is a no-op.
+   */
+  watchLiveUpdates(employeeId: string): void {
+    if (this.watchingEmployeeId === employeeId) return;
+    this.unwatchRealtime?.();
+    this.watchingEmployeeId = employeeId;
+
+    const onChange = () => {
+      clearTimeout(this.realtimeDebounce);
+      this.realtimeDebounce = setTimeout(() => this.restoreActiveSession(employeeId), 400);
+    };
+    const unsubEntries = this.realtime.onTimeEntriesChange(onChange);
+    const unsubPauses = this.realtime.onTimePausesChange(onChange);
+    this.unwatchRealtime = () => {
+      unsubEntries();
+      unsubPauses();
+    };
   }
 
   /**

@@ -1643,6 +1643,7 @@ export class UserTrackerComponent implements OnInit {
     if (me0) this.loadCachedSnapshot(me0.id);
 
     if (me0) await this.timerService.restoreActiveSession(me0.id);
+    if (me0) this.timerService.watchLiveUpdates(me0.id);
     await this.loadClients();
     await this.loadMyTasks();
   }
