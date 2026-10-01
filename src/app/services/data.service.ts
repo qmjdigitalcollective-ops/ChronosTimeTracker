@@ -10,7 +10,7 @@ import {
   Contract,
   Payout,
   TimesheetApproval,
-  TeamPermissionRow, TimePause, PauseReason, WorkTask, TaskStatus } from '../models/time-tracker.models';
+  TeamPermissionRow, TimePause, PauseReason, WorkTask, TaskStatus, TimerEvent } from '../models/time-tracker.models';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // The app no longer talks to Supabase directly. Every read and write goes
@@ -161,6 +161,36 @@ function fromPause(p: TimePause): Row {
     paid: p.paid,
     started_at: p.startedAt,
     ended_at: p.endedAt ?? null,
+  };
+}
+
+function toTimerEvent(r: Row): TimerEvent {
+  return {
+    id: String(r['id']),
+    timeEntryId: String(r['time_entry_id'] ?? ''),
+    employeeId: String(r['employee_id'] ?? ''),
+    employeeName: String(r['employee_name'] ?? ''),
+    action: String(r['action'] ?? 'start') as TimerEvent['action'],
+    reason: r['reason'] == null ? undefined : (String(r['reason']) as PauseReason),
+    clientId: r['client_id'] == null ? undefined : String(r['client_id']),
+    clientName: r['client_name'] == null ? undefined : String(r['client_name']),
+    occurredAt: Number(r['occurred_at'] ?? 0),
+    deviceId: r['device_id'] == null ? undefined : String(r['device_id']),
+  };
+}
+
+function fromTimerEvent(e: TimerEvent): Row {
+  return {
+    id: e.id,
+    time_entry_id: e.timeEntryId,
+    employee_id: e.employeeId,
+    employee_name: e.employeeName,
+    action: e.action,
+    reason: e.reason ?? null,
+    client_id: e.clientId ?? null,
+    client_name: e.clientName ?? null,
+    occurred_at: e.occurredAt,
+    device_id: e.deviceId ?? null,
   };
 }
 
@@ -607,6 +637,26 @@ export class DataService {
 
   async savePause(pause: TimePause): Promise<void> {
     await this.upsertRow('time_pauses', fromPause(pause), pause.id);
+  }
+
+  // ── Timer events (permanent start/pause/resume/stop history) ───────────────
+
+  async getTimerEvents(timeEntryId: string): Promise<TimerEvent[]> {
+    const rows = await this.select('timer_events', { time_entry_id: timeEntryId });
+    return rows.map(toTimerEvent).sort((a, b) => a.occurredAt - b.occurredAt);
+  }
+
+  /** Fire-and-forget by design at the call sites — a missing log line should never
+   * block or fail the actual clock action it's recording. */
+  async saveTimerEvent(event: TimerEvent): Promise<void> {
+    await this.upsertRow('timer_events', fromTimerEvent(event), event.id);
+  }
+
+  // ── Server clock (so a device's own clock is never the authority) ──────────
+
+  async getServerTime(): Promise<number> {
+    const res = await this.call({ op: 'server_time' });
+    return Number(res.serverTime);
   }
 
   // ── Tasks (to-do list, manual or synced from ClickUp) ─────────────────────

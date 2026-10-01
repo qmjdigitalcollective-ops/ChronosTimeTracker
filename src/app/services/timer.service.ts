@@ -13,6 +13,7 @@ import {
   PauseReason,
   PAUSE_REASONS,
   TimePause,
+  TimerEvent,
 } from '../models/time-tracker.models';
 
 @Injectable({
@@ -71,6 +72,36 @@ export class TimerService {
   private screenshotsAllowed = true;
   private intervalMinutes = 10;
 
+  /** serverNow() - Date.now() = this. A device's own clock can be wrong (bad timezone,
+   * manually changed, just drifted) — every "official" timestamp this service writes
+   * (clock-in, pause, resume, clock-out) is anchored to the server's clock via this
+   * offset, fetched once per session, rather than trusting Date.now() directly. */
+  private serverOffsetMs = 0;
+  private serverOffsetReady: Promise<void> | null = null;
+
+  private async ensureServerOffset(): Promise<void> {
+    if (!this.serverOffsetReady) {
+      this.serverOffsetReady = this.db
+        .getServerTime()
+        .then((serverTime) => {
+          this.serverOffsetMs = serverTime - Date.now();
+        })
+        .catch(() => {
+          // No internet / gate unreachable — fall back to the device's own clock
+          // rather than blocking the click. Logged in clockIn/pause/resume anyway,
+          // so a wrong device clock still shows up as an outlier in timer_events.
+          this.serverOffsetMs = 0;
+        });
+    }
+    await this.serverOffsetReady;
+  }
+
+  /** The time to actually write for a clock-in/pause/resume/clock-out — call
+   * ensureServerOffset() first (clockIn does this; it's cheap to call again). */
+  private serverNow(): number {
+    return Date.now() + this.serverOffsetMs;
+  }
+
   constructor(
     private db: DataService,
     private screenshotService: ScreenshotService,
@@ -80,6 +111,7 @@ export class TimerService {
     // so one person never picks up someone else's timer.
     this.loadTodayEntries();
     this.watchIdle();
+    void this.ensureServerOffset();
   }
 
   private watchingEmployeeId: string | null = null;
@@ -258,7 +290,7 @@ export class TimerService {
         this.status.set(active.status);
 
         // Recalculate true elapsed seconds
-        const now = Date.now();
+        const now = this.serverNow();
         let totalElapsed = active.durationSeconds;
         let paused = active.pausedSeconds;
 
@@ -346,10 +378,28 @@ export class TimerService {
     const entry = this.activeEntry();
     if (!entry) return;
     entry.ownerDeviceId = this.deviceId;
-    entry.lastTickAt = Date.now();
+    entry.lastTickAt = this.serverNow();
     await this.db.saveTimeEntry(entry).catch(() => {});
     this.trackedElsewhere.set(false);
     if (entry.status === 'active') this.startTicker();
+  }
+
+  /** Appends one line to this entry's permanent history. Never awaited by callers —
+   * a dropped log line should never hold up or fail the actual clock action. */
+  private logEvent(entry: TimeEntry, action: TimerEvent['action'], reason: PauseReason | undefined, at: number): void {
+    const event: TimerEvent = {
+      id: 'tevt_' + at + '_' + Math.random().toString(36).substring(2, 7),
+      timeEntryId: entry.id,
+      employeeId: entry.employeeId,
+      employeeName: entry.employeeName,
+      action,
+      reason,
+      clientId: entry.clientId,
+      clientName: entry.clientName,
+      occurredAt: at,
+      deviceId: this.deviceId,
+    };
+    this.db.saveTimerEvent(event).catch(() => {});
   }
 
   async loadTodayEntries(): Promise<void> {
@@ -423,7 +473,8 @@ export class TimerService {
     // otherwise the OS shows a screen-recording prompt for nothing.
     if (this.screenshotsAllowed) await this.screenshotService.requestScreenPermission();
 
-    const now = Date.now();
+    await this.ensureServerOffset();
+    const now = this.serverNow();
     const entryId = 'entry_' + now + '_' + Math.random().toString(36).substring(2, 7);
 
     const newEntry: TimeEntry = {
@@ -466,6 +517,7 @@ export class TimerService {
     this.currentSessionScreenshots.set([]);
 
     this.startTicker();
+    this.logEvent(newEntry, 'start', undefined, now);
 
     // Trigger an initial capture 2 seconds in to verify capture is working
     setTimeout(() => {
@@ -495,7 +547,8 @@ export class TimerService {
     this.pauseResumeInFlight = true;
 
     try {
-      const now = Date.now() - awaySeconds * 1000;
+      await this.ensureServerOffset();
+      const now = this.serverNow() - awaySeconds * 1000;
 
       const updated: TimeEntry = {
         ...entry,
@@ -522,6 +575,7 @@ export class TimerService {
       this.currentPause.set(pause);
       this.activeEntry.set(updated);
       this.status.set('paused');
+      this.logEvent(updated, 'pause', reason, now);
     } finally {
       this.pauseResumeInFlight = false;
     }
@@ -533,7 +587,8 @@ export class TimerService {
     this.pauseResumeInFlight = true;
 
     try {
-      const now = Date.now();
+      await this.ensureServerOffset();
+      const now = this.serverNow();
       let pause = this.currentPause();
       if (!pause) {
         const open = (await this.db.getPauses(entry.id).catch(() => [] as TimePause[])).filter((p) => !p.endedAt);
@@ -569,6 +624,7 @@ export class TimerService {
       this.trackedElsewhere.set(false);
 
       this.startTicker();
+      this.logEvent(updated, 'resume', undefined, now);
     } finally {
       this.pauseResumeInFlight = false;
     }
@@ -579,7 +635,8 @@ export class TimerService {
     if (!entry) return null;
 
     this.stopTicker();
-    const now = Date.now();
+    await this.ensureServerOffset();
+    const now = this.serverNow();
     const before = { ...entry };
 
     // Finalize duration and earnings
@@ -626,6 +683,7 @@ export class TimerService {
 
     // Stop screen capture
     this.screenshotService.stopScreenCapture();
+    this.logEvent(entry, 'stop', undefined, now);
 
     // Reset state
     this.activeEntry.set(null);
@@ -712,7 +770,7 @@ export class TimerService {
   private wallElapsedSeconds(): number {
     const entry = this.activeEntry();
     if (!entry) return this.elapsedSeconds();
-    const wall = Math.floor((Date.now() - entry.startTime) / 1000) - (entry.pausedSeconds || 0);
+    const wall = Math.floor((this.serverNow() - entry.startTime) / 1000) - (entry.pausedSeconds || 0);
     return Math.max(0, wall);
   }
 
@@ -751,7 +809,7 @@ export class TimerService {
           // Heartbeat: proves THIS device is the live one, so another device
           // that's also open stays read-only instead of ticking in parallel.
           entry.ownerDeviceId = this.deviceId;
-          entry.lastTickAt = Date.now();
+          entry.lastTickAt = this.serverNow();
           this.activeEntry.set({ ...entry });
           this.db.saveTimeEntry(entry).catch(() => {});
         }

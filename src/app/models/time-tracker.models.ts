@@ -177,6 +177,23 @@ export interface TimePause {
   endedAt?: number;
 }
 
+/** One line in the permanent history of a running timer — never edited after it's
+ * written, only ever added to. Lets a pay dispute ("why is my total wrong?") be
+ * answered by reading exactly what happened, instead of reverse-engineering it
+ * from the final numbers the way Rein's Sep 29 entry had to be investigated. */
+export interface TimerEvent {
+  id: string;
+  timeEntryId: string;
+  employeeId: string;
+  employeeName: string;
+  action: 'start' | 'pause' | 'resume' | 'stop';
+  reason?: PauseReason;
+  clientId?: string;
+  clientName?: string;
+  occurredAt: number;
+  deviceId?: string;
+}
+
 export type TaskStatus = 'todo' | 'in_progress' | 'done';
 
 export interface WorkTask {
