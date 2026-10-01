@@ -292,14 +292,8 @@ export class TimerService {
 
     // Also check the database, not just this tab's memory — catches an active
     // timer started from another device or tab before this one loaded it.
-    // These reads don't depend on each other, so fetch them together (one
-    // round trip instead of four back to back — clock-in felt slow otherwise).
-    const [existing, contracts, settings, permissions] = await Promise.all([
-      this.db.getActiveTimeEntry(employee.id),
-      this.db.getContracts(),
-      this.db.getSettings(),
-      this.db.getPermissions(),
-    ]);
+    // One round trip for all four reads, not four separate ones.
+    const { existing, contracts, settings, permissions } = await this.db.getClockInBootstrap(employee.id);
     if (existing) {
       console.warn('An active session already exists for this person on another device/tab');
       await this.restoreActiveSession(employee.id);

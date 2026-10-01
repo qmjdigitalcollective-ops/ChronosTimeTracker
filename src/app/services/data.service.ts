@@ -481,6 +481,38 @@ export class DataService {
     return toTimeEntry(rows[0]);
   }
 
+  /**
+   * The four reads clockIn() needs (any existing active entry, contracts,
+   * settings, permissions), fetched in one round trip instead of four —
+   * cuts clock-in latency, especially noticeable on an Edge Function cold
+   * start. Falls back to the four separate calls if the server doesn't
+   * support it yet (e.g. mid-deploy), so this can never block clocking in.
+   */
+  async getClockInBootstrap(employeeId: string): Promise<{
+    existing: TimeEntry | null;
+    contracts: Contract[];
+    settings: AppSettings;
+    permissions: TeamPermissionRow[];
+  }> {
+    try {
+      const res = await this.call({ op: 'clock_in_bootstrap', token: this.getToken(), employeeId });
+      return {
+        existing: res.existing ? toTimeEntry(res.existing) : null,
+        contracts: (res.contracts ?? []).map(toContract),
+        settings: res.settings?.[0] ? toSettings(res.settings[0]) : { ...DEFAULT_SETTINGS },
+        permissions: (res.permissions ?? []).map((r: Row) => ({ id: String(r['id']), permissions: r['permissions'] ?? {} })),
+      };
+    } catch {
+      const [existing, contracts, settings, permissions] = await Promise.all([
+        this.getActiveTimeEntry(employeeId),
+        this.getContracts(),
+        this.getSettings(),
+        this.getPermissions(),
+      ]);
+      return { existing, contracts, settings, permissions };
+    }
+  }
+
   async getTimeEntryById(id: string): Promise<TimeEntry | null> {
     const row = await this.selectOne('time_entries', { id });
     return row ? toTimeEntry(row) : null;
