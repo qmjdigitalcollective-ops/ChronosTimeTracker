@@ -195,13 +195,14 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
             <button
               type="button"
               class="btn btn-pause"
+              [disabled]="timerService.pauseResumeInFlight()"
               (click)="pauseMenuOpen.set(!pauseMenuOpen())"
             >
               <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.5" fill="none">
                 <rect x="6" y="4" width="4" height="16"></rect>
                 <rect x="14" y="4" width="4" height="16"></rect>
               </svg>
-              <span>Pause Shift</span>
+              <span>{{ timerService.pauseResumeInFlight() ? 'Pausing…' : 'Pause Shift' }}</span>
             </button>
             </div>
 
@@ -219,12 +220,13 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
             <button
               type="button"
               class="btn btn-resume"
+              [disabled]="timerService.pauseResumeInFlight()"
               (click)="onResumeClick()"
             >
               <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="currentColor">
                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
               </svg>
-              <span>Resume Shift</span>
+              <span>{{ timerService.pauseResumeInFlight() ? 'Resuming…' : 'Resume Shift' }}</span>
             </button>
 
             <button
@@ -1353,6 +1355,7 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
       box-shadow: none;
     }
     .btn-pause:hover { background: var(--av-surface-2); border-color: var(--av-gold); }
+    .btn:disabled { opacity: 0.6; cursor: wait; transform: none; }
     .btn-clock-out {
       background: #7a2a2a;
       color: var(--av-ivory);
