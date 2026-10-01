@@ -144,7 +144,7 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
                 <span class="paused-text">• On pause: {{ pauseLabel(cp.reason) }}</span>
               }
               @if (timerService.pausedForIdle()) {
-                <span class="paused-text">• Paused automatically — no activity for a few minutes. It'll pick back up on its own once you start working again</span>
+                <span class="paused-text">• Paused automatically — no activity for a few minutes. Click Resume Shift when you're ready to continue</span>
               }
             } @else {
               <span class="idle-text">Choose a project and task, then start tracking</span>
@@ -219,7 +219,7 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
             <button
               type="button"
               class="btn btn-resume"
-              (click)="timerService.resume()"
+              (click)="onResumeClick()"
             >
               <svg viewBox="0 0 24 24" width="18" height="18" stroke="currentColor" stroke-width="2.2" fill="currentColor">
                 <polygon points="5 3 19 12 5 21 5 3"></polygon>
@@ -1470,9 +1470,23 @@ export class UserTrackerComponent implements OnInit {
     return PAUSE_REASONS.find((r) => r.key === reason)?.label ?? reason;
   }
 
-  pauseFor(reason: PauseReason): void {
+  async pauseFor(reason: PauseReason): Promise<void> {
     this.pauseMenuOpen.set(false);
-    this.timerService.pause(reason);
+    try {
+      await this.timerService.pause(reason);
+    } catch (e) {
+      console.error('Pause failed:', e);
+      alert('Could not pause — the database did not respond. Check your internet connection and try again.');
+    }
+  }
+
+  async onResumeClick(): Promise<void> {
+    try {
+      await this.timerService.resume();
+    } catch (e) {
+      console.error('Resume failed:', e);
+      alert('Could not resume — the database did not respond. Check your internet connection and try again.');
+    }
   }
 
   clients = signal<Client[]>([]);

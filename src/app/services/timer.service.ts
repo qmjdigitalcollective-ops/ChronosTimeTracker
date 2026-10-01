@@ -110,21 +110,18 @@ export class TimerService {
   }
 
   /**
-   * If the timer is sitting paused only because the idle-detector auto-paused
-   * it (never for a manually chosen pause reason like lunch/meeting — those
-   * still need a deliberate click), pick it back up the moment real activity
-   * is seen again. A pause that's left waiting on a manual click used to
-   * silently keep counting as "away" for however long it took someone to
-   * notice and click Resume, which made a real few-minutes idle gap look
-   * like an hour-plus away.
+   * Activity is seen again after an idle auto-pause. This used to call resume()
+   * automatically — the moment a mouse moved, the timer silently started counting
+   * again, with no click and no confirmation. That's exactly backwards for a pay
+   * tracker: a few seconds of activity (brushing the mouse, glancing at a
+   * notification) could resume billing without the person ever deciding to.
+   * Now it only clears the "why it's paused" banner; resuming always takes an
+   * explicit click, same as any other pause reason.
    */
-  private autoResumeIfIdle(): void {
+  private idleEndedWhilePaused(): void {
     if (this.status() !== 'paused') return;
-    // Only auto-resume when we're sure this was an idle auto-pause, not a
-    // manually chosen one — if the reason isn't known yet (e.g. still
-    // loading right after a reload), do nothing rather than guess.
     if (this.currentPause()?.reason !== 'idle') return;
-    this.resume();
+    this.pausedForIdle.set(false);
   }
 
   /** Auto-pause after 2 minutes away from the keyboard/mouse (desktop app only). */
@@ -143,8 +140,7 @@ export class TimerService {
     });
 
     api.onIdleEnded(() => {
-      this.pausedForIdle.set(false);
-      this.autoResumeIfIdle();
+      this.idleEndedWhilePaused();
     });
   }
 
@@ -160,7 +156,7 @@ export class TimerService {
     let lastActivity = Date.now();
     const touch = () => {
       lastActivity = Date.now();
-      this.autoResumeIfIdle();
+      this.idleEndedWhilePaused();
     };
     for (const ev of ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'wheel']) {
       window.addEventListener(ev, touch, { passive: true });
@@ -182,10 +178,7 @@ export class TimerService {
         const detector = new Detector();
         detector.addEventListener('change', () => {
           if (detector.userState === 'idle' || detector.screenState === 'locked') goIdle(IDLE_SECONDS);
-          else {
-            this.pausedForIdle.set(false);
-            this.autoResumeIfIdle();
-          }
+          else this.idleEndedWhilePaused();
         });
         await detector.start({ threshold: IDLE_SECONDS * 1000 });
         this.systemIdleWatching = true;
@@ -207,7 +200,7 @@ export class TimerService {
   private notifyIdle(): void {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
     const n = new Notification('Your timer was paused', {
-      body: 'No activity for 4 minutes. It will resume on its own as soon as you start working again.',
+      body: "No activity for 4 minutes. Click Resume Shift in the app when you're ready to continue.",
       requireInteraction: true,
     });
     n.onclick = () => {
@@ -451,7 +444,19 @@ export class TimerService {
       lastTickAt: now,
     };
 
-    await this.db.saveTimeEntry(newEntry);
+    try {
+      await this.db.saveTimeEntry(newEntry);
+    } catch (e) {
+      // The database refuses a second open timer for the same person (a safety net for
+      // the rare case where two clock-ins land at nearly the same instant and both pass
+      // the "existing" check above before either one has saved). Someone already won —
+      // just pick up whichever session actually got created instead of showing an error.
+      if (String((e as any)?.message ?? e).toLowerCase().includes('duplicate key')) {
+        await this.restoreActiveSession(employee.id);
+        return false;
+      }
+      throw e;
+    }
     this.activeEntry.set(newEntry);
     this.status.set('active');
     this.elapsedSeconds.set(0);
@@ -472,80 +477,101 @@ export class TimerService {
     return true;
   }
 
+  /** Guards pause()/resume() against a second call landing while the first is still
+   * being saved (a double-click, or the system-wide IdleDetector and the in-tab
+   * fallback both firing within the same moment). Deliberately separate from
+   * `status` — `status` only changes once the database has actually confirmed the
+   * change, so the screen never claims "Paused" (or "Active") before it's real. If
+   * the save fails partway (connection drops, etc.), the UI simply never moved, no
+   * rollback needed — the old approach flipped the screen first and hoped the save
+   * would land, which could leave someone staring at "Paused" for a save that failed
+   * and a database that still said "Active" the next time it was checked. */
+  private pauseResumeInFlight = false;
+
   /** `awaySeconds`: how long the person was already idle — that stretch isn't counted as work. */
   async pause(reason: PauseReason = 'other', awaySeconds = 0): Promise<void> {
     const entry = this.activeEntry();
-    if (!entry || this.status() !== 'active') return;
+    if (!entry || this.status() !== 'active' || this.pauseResumeInFlight) return;
+    this.pauseResumeInFlight = true;
 
-    // Flip the status synchronously, before any `await` — two idle triggers
-    // landing a moment apart (the system-wide IdleDetector and the in-tab
-    // fallback both firing) used to both pass the guard above and each
-    // create their own pause record, because status only flipped to
-    // 'paused' after the save had already gone out.
-    this.status.set('paused');
-    this.stopTicker();
-    const now = Date.now() - awaySeconds * 1000;
+    try {
+      const now = Date.now() - awaySeconds * 1000;
 
-    entry.status = 'paused';
-    entry.lastPauseTime = now;
-    entry.durationSeconds = Math.max(0, this.wallElapsedSeconds() - awaySeconds);
-    entry.totalPay = (entry.durationSeconds / 3600) * entry.hourlyRate;
+      const updated: TimeEntry = {
+        ...entry,
+        status: 'paused',
+        lastPauseTime: now,
+        durationSeconds: Math.max(0, this.wallElapsedSeconds() - awaySeconds),
+      };
+      updated.totalPay = (updated.durationSeconds / 3600) * updated.hourlyRate;
 
-    const pause: TimePause = {
-      id: 'pause_' + now + '_' + Math.random().toString(36).substring(2, 6),
-      timeEntryId: entry.id,
-      employeeId: entry.employeeId,
-      reason,
-      paid: PAUSE_REASONS.find((r) => r.key === reason)?.paid ?? false,
-      startedAt: now,
-    };
-    this.currentPause.set(pause);
+      const pause: TimePause = {
+        id: 'pause_' + now + '_' + Math.random().toString(36).substring(2, 6),
+        timeEntryId: entry.id,
+        employeeId: entry.employeeId,
+        reason,
+        paid: PAUSE_REASONS.find((r) => r.key === reason)?.paid ?? false,
+        startedAt: now,
+      };
 
-    await this.db.saveTimeEntry(entry);
-    this.db.savePause(pause).catch(() => {});
-    this.activeEntry.set(entry);
+      // Only once the database confirms this did the screen ever say "Paused".
+      await this.db.saveTimeEntry(updated);
+      this.db.savePause(pause).catch(() => {});
+
+      this.stopTicker();
+      this.currentPause.set(pause);
+      this.activeEntry.set(updated);
+      this.status.set('paused');
+    } finally {
+      this.pauseResumeInFlight = false;
+    }
   }
 
   async resume(): Promise<void> {
     const entry = this.activeEntry();
-    if (!entry || this.status() !== 'paused') return;
+    if (!entry || this.status() !== 'paused' || this.pauseResumeInFlight) return;
+    this.pauseResumeInFlight = true;
 
-    // Same fix as pause(): flip the status before any `await` so a second
-    // resume() landing a moment later (a double-click, or auto-resume firing
-    // again on the next mousemove before the first call's status update had
-    // gone out) sees 'active' already and backs off, instead of both calls
-    // racing through the same pause-closing and paused-seconds math.
-    this.status.set('active');
+    try {
+      const now = Date.now();
+      let pause = this.currentPause();
+      if (!pause) {
+        const open = (await this.db.getPauses(entry.id).catch(() => [] as TimePause[])).filter((p) => !p.endedAt);
+        pause = open[open.length - 1] ?? null;
+      }
 
-    const now = Date.now();
-    let pause = this.currentPause();
-    if (!pause) {
-      const open = (await this.db.getPauses(entry.id).catch(() => [] as TimePause[])).filter((p) => !p.endedAt);
-      pause = open[open.length - 1] ?? null;
-    }
-    if (pause) {
-      pause.endedAt = now;
-      this.db.savePause(pause).catch(() => {});
+      const updated: TimeEntry = { ...entry };
+      // Paid pauses (meetings, technical problems) still count as work
+      if (updated.lastPauseTime && !pause?.paid) {
+        const addedPaused = Math.max(0, Math.floor((now - updated.lastPauseTime) / 1000));
+        updated.pausedSeconds = (updated.pausedSeconds || 0) + addedPaused;
+        delete updated.lastPauseTime;
+      } else {
+        delete updated.lastPauseTime;
+      }
+      updated.status = 'active';
+      // Clicking Resume here is a deliberate action on this device — it becomes the driver.
+      updated.ownerDeviceId = this.deviceId;
+      updated.lastTickAt = now;
+
+      // Only once the database confirms this did the screen ever say "Active" again.
+      await this.db.saveTimeEntry(updated);
+      if (pause) {
+        pause.endedAt = now;
+        this.db.savePause(pause).catch(() => {});
+      }
+
       this.currentPause.set(null);
-    }
-    // Paid pauses (meetings, technical problems) still count as work
-    if (entry.lastPauseTime && !(pause?.paid)) {
-      const addedPaused = Math.max(0, Math.floor((now - entry.lastPauseTime) / 1000));
-      entry.pausedSeconds = (entry.pausedSeconds || 0) + addedPaused;
-      this.pausedSeconds.set(entry.pausedSeconds);
-      delete entry.lastPauseTime;
-    }
+      this.pausedSeconds.set(updated.pausedSeconds);
+      this.activeEntry.set(updated);
+      this.status.set('active');
+      this.pausedForIdle.set(false);
+      this.trackedElsewhere.set(false);
 
-    entry.status = 'active';
-    // Clicking Resume here is a deliberate action on this device — it becomes the driver.
-    entry.ownerDeviceId = this.deviceId;
-    entry.lastTickAt = now;
-    await this.db.saveTimeEntry(entry);
-    this.activeEntry.set(entry);
-    this.pausedForIdle.set(false);
-    this.trackedElsewhere.set(false);
-
-    this.startTicker();
+      this.startTicker();
+    } finally {
+      this.pauseResumeInFlight = false;
+    }
   }
 
   async clockOut(): Promise<TimeEntry | null> {
@@ -557,9 +583,12 @@ export class TimerService {
     const before = { ...entry };
 
     // Finalize duration and earnings
-    // Clocking out while paused: the paused stretch isn't work, so use the time frozen at the pause
+    // Clocking out while paused: an unpaid pause (break, idle, etc.) isn't work, so use the
+    // time frozen at the pause. A PAID pause (meeting, technical problem) still counts as
+    // work all the way through — clocking out straight from one without clicking Resume
+    // first used to silently drop that paid stretch from both the hours and the pay.
     const wasPaused = entry.status === 'paused';
-    const finalDuration = wasPaused ? entry.durationSeconds : this.wallElapsedSeconds();
+    let finalDuration = wasPaused ? entry.durationSeconds : this.wallElapsedSeconds();
     if (wasPaused) {
       // Same fallback as resume(): if the page was reloaded while paused, the in-memory
       // currentPause is gone, but the pause record in the database is still open and
@@ -568,6 +597,9 @@ export class TimerService {
       if (!openPause) {
         const open = (await this.db.getPauses(entry.id).catch(() => [] as TimePause[])).filter((p) => !p.endedAt);
         openPause = open[open.length - 1] ?? null;
+      }
+      if (openPause?.paid && entry.lastPauseTime) {
+        finalDuration += Math.max(0, Math.floor((now - entry.lastPauseTime) / 1000));
       }
       if (openPause) {
         openPause.endedAt = now;
