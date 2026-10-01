@@ -4648,6 +4648,14 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
       note,
     });
     this.approvals.set(await this.db.getApprovals());
+
+    // Approving and paying used to be two disconnected trips (Timesheet
+    // Approval, then separately Team Pay) — offer to record the payout right
+    // here, with the amount already computed, instead of a second trip
+    // where the hours/amount would need re-entering by hand.
+    if (status === 'approved' && this.canMarkPaid() && !this.payoutFor(row.employeeId)) {
+      await this.markPaid(row);
+    }
   }
 
   /** Open this member's timesheet for the same dates. */
