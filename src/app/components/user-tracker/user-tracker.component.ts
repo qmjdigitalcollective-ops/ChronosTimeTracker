@@ -324,6 +324,17 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
           }
         </div>
         }
+        @if (perms().showPayPanel && myPayouts().length > 0) {
+          <div class="payslip-history">
+            <span class="pay-stat-label">Payslip history</span>
+            @for (p of myPayouts() | slice:0:12; track p.id) {
+              <button type="button" class="slip-history-row" (click)="payslipFor.set(p)">
+                <span>{{ formatPeriod(toDate(p.periodStart), toDate(p.periodEnd)) }}</span>
+                <span class="money-item">{{ p.amount | money }}</span>
+              </button>
+            }
+          </div>
+        }
       </div>
       }
 
@@ -1176,6 +1187,22 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
       text-decoration: underline;
       cursor: pointer;
     }
+    .payslip-history { margin-top: 14px; display: flex; flex-direction: column; gap: 4px; }
+    .slip-history-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: none;
+      border: none;
+      border-top: 1px solid var(--av-divider);
+      padding: 6px 2px;
+      font: inherit;
+      font-size: 0.8rem;
+      color: var(--av-forest);
+      cursor: pointer;
+      text-align: left;
+    }
+    .slip-history-row:hover { color: var(--av-gold-text); }
     .no-pay-panel .tracker-card { grid-column: 1 / -1; }
     .range-nav { display: inline-flex; align-items: center; gap: 8px; }
     .range-label { font-size: 0.85rem; font-weight: 600; color: var(--av-forest); }
@@ -1448,6 +1475,10 @@ export class UserTrackerComponent implements OnInit {
   })();
   readonly weekLabel = formatPeriod(...this.thisWeek);
   readonly lastPeriodLabel = formatPeriod(...this.lastPeriod);
+  readonly formatPeriod = formatPeriod;
+  toDate(epochMs: number): Date {
+    return new Date(epochMs);
+  }
 
   constructor(
     private db: DataService,
