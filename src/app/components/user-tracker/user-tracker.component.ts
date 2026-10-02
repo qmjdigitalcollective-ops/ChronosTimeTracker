@@ -160,6 +160,14 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
             </button>
           </div>
         }
+        @if (timerService.idleWarningSecondsLeft(); as secsLeft) {
+          <div class="idle-warning-banner">
+            <span>No activity detected — this will pause in {{ secsLeft }}s. Still working?</span>
+            <button type="button" class="btn-still-working" (click)="timerService.stillWorking()">
+              I'm still here
+            </button>
+          </div>
+        }
 
         <!-- Control Action Buttons -->
         <div class="actions-row">
@@ -805,6 +813,32 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
       background: none;
       border: 1px solid var(--av-amber-text);
       color: var(--av-amber-text);
+      border-radius: 8px;
+      padding: 0.3rem 0.7rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .idle-warning-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+      background: var(--av-amber-bg, rgba(217, 160, 40, 0.1));
+      border: 1px solid var(--av-amber-text);
+      color: var(--av-amber-text);
+      border-radius: 10px;
+      padding: 0.6rem 0.9rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 0.75rem;
+    }
+    .btn-still-working {
+      flex-shrink: 0;
+      background: var(--av-amber-text);
+      border: 1px solid var(--av-amber-text);
+      color: var(--av-ivory);
       border-radius: 8px;
       padding: 0.3rem 0.7rem;
       font-size: 0.8rem;

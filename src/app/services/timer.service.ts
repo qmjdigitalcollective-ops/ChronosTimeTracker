@@ -33,6 +33,36 @@ export class TimerService {
    * click — so the UI can explain why the timer stopped. Desktop app only;
    * a browser tab has no way to see activity outside itself. */
   readonly pausedForIdle = signal<boolean>(false);
+  /** Seconds left before an idle auto-pause actually happens, or null when no warning
+   * is showing. Gives a heads-up with a chance to say "still working" instead of just
+   * discovering afterward that the timer paused — set a few minutes before the real
+   * idle-pause fires, counts down, and clears the moment real activity is seen again
+   * or the pause actually happens. */
+  readonly idleWarningSecondsLeft = signal<number | null>(null);
+  private idleWarningCountdownId: any = null;
+
+  private startIdleWarning(secondsUntilPause: number): void {
+    if (this.status() !== 'active') return;
+    clearInterval(this.idleWarningCountdownId);
+    this.idleWarningSecondsLeft.set(Math.max(1, Math.round(secondsUntilPause)));
+    this.idleWarningCountdownId = setInterval(() => {
+      const left = (this.idleWarningSecondsLeft() ?? 1) - 1;
+      if (left <= 0) {
+        clearInterval(this.idleWarningCountdownId);
+      }
+      this.idleWarningSecondsLeft.set(Math.max(0, left));
+    }, 1000);
+  }
+
+  private clearIdleWarning(): void {
+    clearInterval(this.idleWarningCountdownId);
+    this.idleWarningSecondsLeft.set(null);
+  }
+
+  /** The "still here" button in the warning banner, and any real activity, call this. */
+  stillWorking(): void {
+    this.clearIdleWarning();
+  }
 
   /** The pause currently in progress (why the timer is stopped) */
   readonly currentPause = signal<TimePause | null>(null);
@@ -164,7 +194,16 @@ export class TimerService {
       return;
     }
 
+    api.onIdleWarning((data: { secondsUntilPause: number }) => {
+      this.startIdleWarning(data?.secondsUntilPause ?? 60);
+    });
+
+    api.onIdleWarningCancelled(() => {
+      this.clearIdleWarning();
+    });
+
     api.onIdleStarted(() => {
+      this.clearIdleWarning();
       if (this.status() === 'active') {
         this.pausedForIdle.set(true);
         this.pause('idle');
@@ -172,6 +211,7 @@ export class TimerService {
     });
 
     api.onIdleEnded(() => {
+      this.clearIdleWarning();
       this.idleEndedWhilePaused();
     });
   }
@@ -185,9 +225,12 @@ export class TimerService {
    */
   private watchIdleInBrowser(): void {
     const IDLE_SECONDS = 240;
+    // A heads-up before the real pause — see startIdleWarning()'s doc comment.
+    const WARNING_SECONDS = 180;
     let lastActivity = Date.now();
     const touch = () => {
       lastActivity = Date.now();
+      this.clearIdleWarning();
       this.idleEndedWhilePaused();
     };
     for (const ev of ['mousemove', 'mousedown', 'keydown', 'scroll', 'touchstart', 'wheel']) {
@@ -196,6 +239,7 @@ export class TimerService {
 
     const goIdle = (awaySeconds: number) => {
       if (this.status() !== 'active') return;
+      this.clearIdleWarning();
       this.pausedForIdle.set(true);
       this.pause('idle', awaySeconds);
       this.notifyIdle();
@@ -210,7 +254,10 @@ export class TimerService {
         const detector = new Detector();
         detector.addEventListener('change', () => {
           if (detector.userState === 'idle' || detector.screenState === 'locked') goIdle(IDLE_SECONDS);
-          else this.idleEndedWhilePaused();
+          else {
+            this.clearIdleWarning();
+            this.idleEndedWhilePaused();
+          }
         });
         await detector.start({ threshold: IDLE_SECONDS * 1000 });
         this.systemIdleWatching = true;
@@ -219,10 +266,14 @@ export class TimerService {
       }
     };
 
+    // Runs regardless of whether the system-wide detector is active, so the warning
+    // shows consistently from in-tab activity even when system-wide watching is on.
     setInterval(() => {
-      if (this.systemIdleWatching || document.visibilityState !== 'visible') return;
+      if (document.visibilityState !== 'visible') return;
       const idleFor = Math.floor((Date.now() - lastActivity) / 1000);
+      if (this.systemIdleWatching && idleFor < IDLE_SECONDS) return; // let the detector decide the actual pause
       if (idleFor >= IDLE_SECONDS) goIdle(idleFor);
+      else if (idleFor >= WARNING_SECONDS) this.startIdleWarning(IDLE_SECONDS - idleFor);
     }, 5000);
   }
 
@@ -544,6 +595,7 @@ export class TimerService {
   async pause(reason: PauseReason = 'other', awaySeconds = 0): Promise<void> {
     const entry = this.activeEntry();
     if (!entry || this.status() !== 'active' || this.pauseResumeInFlight()) return;
+    this.clearIdleWarning();
     this.pauseResumeInFlight.set(true);
 
     try {
@@ -641,6 +693,7 @@ export class TimerService {
     const entry = this.activeEntry();
     if (!entry) return null;
 
+    this.clearIdleWarning();
     this.stopTicker();
     await this.ensureServerOffset();
     const now = this.serverNow();

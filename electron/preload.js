@@ -5,6 +5,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   captureScreen: () => ipcRenderer.invoke('capture-screen'),
   onIdleStarted: (callback) => ipcRenderer.on('idle-started', () => callback()),
   onIdleEnded: (callback) => ipcRenderer.on('idle-ended', (_event, data) => callback(data)),
+  onIdleWarning: (callback) => ipcRenderer.on('idle-warning', (_event, data) => callback(data)),
+  onIdleWarningCancelled: (callback) => ipcRenderer.on('idle-warning-cancelled', () => callback()),
   onUpdateReady: (callback) => ipcRenderer.on('update-ready', (_event, data) => callback(data)),
   installUpdate: () => ipcRenderer.invoke('install-update'),
 });

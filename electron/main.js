@@ -32,19 +32,37 @@ ipcMain.handle('install-update', () => {
 // anywhere on the computer (not just in this window) — a real "stepped away
 // from the desk" signal, which a browser tab alone could never detect.
 const IDLE_THRESHOLD_SECONDS = 240;
+// A heads-up before that: at this point the person gets a "still working?"
+// warning with time left to respond, instead of just discovering afterward
+// that they'd been paused — pausing was already a surprise once tonight.
+const WARNING_THRESHOLD_SECONDS = 180;
 let wasIdle = false;
+let warned = false;
 
 function startIdleWatcher() {
   setInterval(() => {
     if (!mainWindow) return;
     const idleSeconds = powerMonitor.getSystemIdleTime();
     const isIdleNow = idleSeconds >= IDLE_THRESHOLD_SECONDS;
+    const isWarningNow = idleSeconds >= WARNING_THRESHOLD_SECONDS;
+
     if (isIdleNow && !wasIdle) {
       wasIdle = true;
+      warned = false;
       mainWindow.webContents.send('idle-started');
     } else if (!isIdleNow && wasIdle) {
       wasIdle = false;
       mainWindow.webContents.send('idle-ended', { idleSeconds });
+    } else if (isWarningNow && !warned && !wasIdle) {
+      warned = true;
+      mainWindow.webContents.send('idle-warning', {
+        secondsUntilPause: IDLE_THRESHOLD_SECONDS - idleSeconds,
+      });
+    } else if (!isWarningNow && warned && !wasIdle) {
+      // Activity seen again before the full idle threshold — the warning
+      // never turned into an actual pause, so just withdraw it.
+      warned = false;
+      mainWindow.webContents.send('idle-warning-cancelled');
     }
   }, 5000);
 }
