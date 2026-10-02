@@ -251,27 +251,48 @@ export class TimerService {
       if (this.systemIdleWatching || !Detector) return;
       try {
         if ((await Detector.requestPermission()) !== 'granted') return;
-        const detector = new Detector();
-        detector.addEventListener('change', () => {
-          if (detector.userState === 'idle' || detector.screenState === 'locked') goIdle(IDLE_SECONDS);
+
+        // Two detectors, not one: the real Idle Detection API only reports
+        // "idle" once the single threshold it was started with is crossed — it
+        // can't also tell you "almost idle". Starting a SECOND detector at the
+        // warning threshold is the only way to get an earlier signal that's
+        // still system-wide (sees the whole computer, not just this tab) — so
+        // the warning keeps working even while this tab sits in the background,
+        // same as the real pause already did.
+        const pauseDetector = new Detector();
+        pauseDetector.addEventListener('change', () => {
+          if (pauseDetector.userState === 'idle' || pauseDetector.screenState === 'locked') goIdle(IDLE_SECONDS);
           else {
             this.clearIdleWarning();
             this.idleEndedWhilePaused();
           }
         });
-        await detector.start({ threshold: IDLE_SECONDS * 1000 });
+        await pauseDetector.start({ threshold: IDLE_SECONDS * 1000 });
+
+        const warnDetector = new Detector();
+        warnDetector.addEventListener('change', () => {
+          if (this.status() !== 'active') return;
+          if (warnDetector.userState === 'idle' || warnDetector.screenState === 'locked') {
+            this.startIdleWarning(IDLE_SECONDS - WARNING_SECONDS);
+          } else {
+            this.clearIdleWarning();
+          }
+        });
+        await warnDetector.start({ threshold: WARNING_SECONDS * 1000 });
+
         this.systemIdleWatching = true;
       } catch {
         // Not allowed or unsupported — the in-tab fallback below still runs.
       }
     };
 
-    // Runs regardless of whether the system-wide detector is active, so the warning
-    // shows consistently from in-tab activity even when system-wide watching is on.
+    // In-tab fallback only — once the system-wide detectors above are running,
+    // they own both the warning and the real pause regardless of tab visibility,
+    // so this loop backs off entirely rather than also acting on tab-only activity.
     setInterval(() => {
+      if (this.systemIdleWatching) return;
       if (document.visibilityState !== 'visible') return;
       const idleFor = Math.floor((Date.now() - lastActivity) / 1000);
-      if (this.systemIdleWatching && idleFor < IDLE_SECONDS) return; // let the detector decide the actual pause
       if (idleFor >= IDLE_SECONDS) goIdle(idleFor);
       else if (idleFor >= WARNING_SECONDS) this.startIdleWarning(IDLE_SECONDS - idleFor);
     }, 5000);
