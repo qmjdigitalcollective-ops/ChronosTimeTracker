@@ -220,7 +220,7 @@ export class TimerService {
    * Website version: pause after 4 minutes with no activity and show a system
    * notification that brings them back. Uses Chrome's Idle Detection API when
    * allowed (sees the whole computer); otherwise falls back to activity inside
-   * this tab, and only while the tab is visible — a hidden tab can't tell
+   * this tab, and only while the tab is visible and focused — a background tab can't tell
    * "away" from "working in another app".
    */
   private watchIdleInBrowser(): void {
@@ -247,10 +247,10 @@ export class TimerService {
 
     const Detector = (window as any).IdleDetector;
     this.systemIdleWatching = false;
-    this.startSystemIdle = async () => {
+    this.startSystemIdle = async (alreadyGranted = false) => {
       if (this.systemIdleWatching || !Detector) return;
       try {
-        if ((await Detector.requestPermission()) !== 'granted') return;
+        if (!alreadyGranted && (await Detector.requestPermission()) !== 'granted') return;
 
         // Two detectors, not one: the real Idle Detection API only reports
         // "idle" once the single threshold it was started with is crossed — it
@@ -289,9 +289,25 @@ export class TimerService {
     // In-tab fallback only — once the system-wide detectors above are running,
     // they own both the warning and the real pause regardless of tab visibility,
     // so this loop backs off entirely rather than also acting on tab-only activity.
+    // Permission granted on an earlier visit: start the system-wide detectors now (no click
+    // needed), instead of falling back to the in-tab check after every reload.
+    navigator.permissions
+      ?.query({ name: 'idle-detection' as PermissionName })
+      .then((p) => {
+        if (p.state === 'granted') void this.startSystemIdle(true);
+      })
+      .catch(() => {});
+
     setInterval(() => {
       if (this.systemIdleWatching) return;
-      if (document.visibilityState !== 'visible') return;
+      // A tab only sees its own mouse/keys, so time on another tab/app looks idle when it
+      // isn't. Only count idle while this tab is in front, and restart the clock whenever
+      // it isn't — coming back from another tab must never auto-pause.
+      if (document.visibilityState !== 'visible' || !document.hasFocus()) {
+        lastActivity = Date.now();
+        this.clearIdleWarning();
+        return;
+      }
       const idleFor = Math.floor((Date.now() - lastActivity) / 1000);
       if (idleFor >= IDLE_SECONDS) goIdle(idleFor);
       else if (idleFor >= WARNING_SECONDS) this.startIdleWarning(IDLE_SECONDS - idleFor);
@@ -299,7 +315,7 @@ export class TimerService {
   }
 
   private systemIdleWatching = false;
-  private startSystemIdle: () => Promise<void> = async () => {};
+  private startSystemIdle: (alreadyGranted?: boolean) => Promise<void> = async () => {};
 
   private notifyIdle(): void {
     if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;

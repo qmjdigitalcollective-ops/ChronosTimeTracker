@@ -69,7 +69,8 @@ import { AuthService } from '../../services/auth.service';
   `,
   styles: [`
     .login-container {
-      min-height: 85vh;
+      min-height: 100vh;
+      box-sizing: border-box;
       display: flex;
       align-items: center;
       justify-content: center;
