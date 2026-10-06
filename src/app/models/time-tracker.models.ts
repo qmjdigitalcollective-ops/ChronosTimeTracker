@@ -29,7 +29,7 @@ export interface ScreenshotRecord {
   employeeId: string;
   employeeName: string;
   timestamp: number; // Epoch ms
-  imageDataUrl: string; // base64 JPEG
+  imageDataUrl: string; // base64 WebP (JPEG for older captures / fallback)
   thumbnailDataUrl?: string;
   driveFileId?: string;
   driveViewUrl?: string;

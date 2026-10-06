@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { FormatDurationPipe } from './pipes/format-duration.pipe';
 import { AuthService } from './services/auth.service';
 import { RealtimeService } from './services/realtime.service';
-import { DataService, LoginResult } from './services/data.service';
+import { DataService, LoginResult, liveDuration, HEARTBEAT_SECONDS } from './services/data.service';
 
 class MockRealtimeService {
   async setSession(): Promise<void> {}
@@ -281,5 +281,19 @@ describe('FormatDurationPipe', () => {
   it('should handle null or negative gracefully', () => {
     expect(pipe.transform(null)).toBe('00:00:00');
     expect(pipe.transform(-10)).toBe('00:00');
+  });
+});
+
+describe('liveDuration (running timers only save every HEARTBEAT_SECONDS)', () => {
+  const now = Date.now();
+  it('adds the time since the last save to a running entry', () => {
+    expect(liveDuration({ status: 'active', duration_seconds: 100, last_tick_at: now - 60_000 })).toBe(160);
+  });
+  it('caps the estimate at one heartbeat, so a dead device does not keep growing', () => {
+    expect(liveDuration({ status: 'active', duration_seconds: 100, last_tick_at: now - 86_400_000 })).toBe(100 + HEARTBEAT_SECONDS);
+  });
+  it('leaves paused and completed entries exactly as saved', () => {
+    expect(liveDuration({ status: 'paused', duration_seconds: 100, last_tick_at: now - 60_000 })).toBe(100);
+    expect(liveDuration({ status: 'completed', duration_seconds: 100, last_tick_at: now - 60_000 })).toBe(100);
   });
 });

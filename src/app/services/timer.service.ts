@@ -1,5 +1,5 @@
 import { Injectable, signal } from '@angular/core';
-import { DataService } from './data.service';
+import { DataService, HEARTBEAT_SECONDS } from './data.service';
 import { ScreenshotService } from './screenshot.service';
 import { RealtimeService } from './realtime.service';
 import { payRateFor } from './rates';
@@ -95,7 +95,9 @@ export class TimerService {
 
   /** A live owner's heartbeat (lastTickAt) older than this is treated as dead —
    * that device's app was closed/crashed, so it's safe to take over automatically. */
-  private static readonly OWNER_STALE_MS = 90_000;
+  // ponytail: must stay above HEARTBEAT_SECONDS or two open devices ping-pong ownership.
+  // Cost: if the owning device dies, another one waits up to this long (or uses Take over).
+  private static readonly OWNER_STALE_MS = (HEARTBEAT_SECONDS + 300) * 1000;
 
   private tickerIntervalId: any = null;
   /** Team Access → "Screenshots" for the person whose timer is running */
@@ -163,8 +165,10 @@ export class TimerService {
       clearTimeout(this.realtimeDebounce);
       this.realtimeDebounce = setTimeout(() => this.restoreActiveSession(employeeId), 400);
     };
-    const unsubEntries = this.realtime.onTimeEntriesChange(onChange);
-    const unsubPauses = this.realtime.onTimePausesChange(onChange);
+    // Only this person's rows — an admin can see everyone's, and every teammate's
+    // heartbeat used to re-run a full restore of the admin's own timer.
+    const unsubEntries = this.realtime.onTimeEntriesChange(onChange, employeeId);
+    const unsubPauses = this.realtime.onTimePausesChange(onChange, employeeId);
     this.unwatchRealtime = () => {
       unsubEntries();
       unsubPauses();
@@ -366,14 +370,20 @@ export class TimerService {
     }
 
     try {
-      const settings = await this.db.getSettings();
-      this.intervalMinutes = settings.screenshotIntervalMinutes || 10;
-      this.nextScreenshotSeconds.set(this.intervalMinutes * 60);
-
       const active = await this.db.getActiveTimeEntry(employeeId);
       if (active) {
-        const me = await this.db.getEmployeeById(employeeId);
-        this.screenshotsAllowed = effectivePermissions(await this.db.getPermissions(), me).screenshots;
+        // Realtime calls this on every change to the entry this device is already showing.
+        // Settings, permissions and the session's screenshots (full images) only need
+        // loading once per entry — re-reading them on every notification was most of the
+        // database egress, and resetting the countdown here kept postponing screenshots.
+        const fresh = !isSamePerson || this.activeEntry()?.id !== active.id;
+        if (fresh) {
+          const settings = await this.db.getSettings();
+          this.intervalMinutes = settings.screenshotIntervalMinutes || 10;
+          this.nextScreenshotSeconds.set(this.intervalMinutes * 60);
+          const me = await this.db.getEmployeeById(employeeId);
+          this.screenshotsAllowed = effectivePermissions(await this.db.getPermissions(), me).screenshots;
+        }
         this.activeEntry.set(active);
         this.status.set(active.status);
 
@@ -432,9 +442,11 @@ export class TimerService {
         this.elapsedSeconds.set(totalElapsed);
         this.pausedSeconds.set(paused);
 
-        // Load screenshots for this session
-        const screenshots = await this.db.getScreenshots(active.id);
-        this.currentSessionScreenshots.set(screenshots);
+        // This device adds its own captures to the list as it takes them; only another
+        // device's captures (when it's the one driving the timer) need fetching.
+        if (fresh || this.trackedElsewhere()) {
+          this.currentSessionScreenshots.set(await this.db.getScreenshots(active.id));
+        }
       } else if (isSamePerson) {
         // No active entry after all (e.g. clocked out from another device) —
         // the reset at the top was skipped for this same person, so clear it
@@ -881,8 +893,9 @@ export class TimerService {
         const nextElapsed = this.wallElapsedSeconds();
         this.elapsedSeconds.set(nextElapsed);
 
-        // Persist the current duration about every 30 seconds
-        if (nextElapsed - this.lastPersistedSeconds >= 30 && this.activeEntry()) {
+        // Persist the current duration every HEARTBEAT_SECONDS. Nothing is lost between
+        // saves: the true elapsed time is always recomputed from startTime on reload.
+        if (nextElapsed - this.lastPersistedSeconds >= HEARTBEAT_SECONDS && this.activeEntry()) {
           this.lastPersistedSeconds = nextElapsed;
           const entryId = this.activeEntry()!.id;
 

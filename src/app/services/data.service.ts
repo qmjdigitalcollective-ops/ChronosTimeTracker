@@ -93,6 +93,22 @@ function fromClient(c: Client): Row {
   };
 }
 
+/** How often a running timer saves its duration (the "heartbeat"). Every save fans out
+ * to every open admin dashboard through Realtime, so this is the main dial on database
+ * traffic — it used to be 30 seconds. */
+export const HEARTBEAT_SECONDS = 600;
+
+/** A running entry's saved duration is only as fresh as its last heartbeat (up to
+ * HEARTBEAT_SECONDS old). Estimate the live value from the time since that save —
+ * capped at one heartbeat, so a device that died mid-shift doesn't keep growing. */
+export function liveDuration(r: Row): number {
+  const saved = Number(r['duration_seconds'] ?? 0);
+  const lastTick = num(r['last_tick_at']);
+  if (r['status'] !== 'active' || !lastTick) return saved;
+  const sinceTick = Math.floor((Date.now() - lastTick) / 1000);
+  return saved + Math.min(Math.max(0, sinceTick), HEARTBEAT_SECONDS);
+}
+
 function toTimeEntry(r: Row): TimeEntry {
   return {
     id: String(r['id']),
@@ -103,7 +119,7 @@ function toTimeEntry(r: Row): TimeEntry {
     taskDescription: String(r['task_description'] ?? ''),
     startTime: Number(r['start_time'] ?? 0),
     endTime: num(r['end_time']),
-    durationSeconds: Number(r['duration_seconds'] ?? 0),
+    durationSeconds: liveDuration(r),
     pausedSeconds: Number(r['paused_seconds'] ?? 0),
     status: (r['status'] || 'completed') as TimeEntry['status'],
     hourlyRate: Number(r['hourly_rate'] ?? 0),

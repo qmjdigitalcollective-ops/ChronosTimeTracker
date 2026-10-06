@@ -39,16 +39,17 @@ export class RealtimeService {
   }
 
   /** Fires on any insert/update/delete to time_entries this person is allowed to see. */
-  onTimeEntriesChange(callback: () => void): () => void {
-    return this.subscribe('time_entries', callback);
+  onTimeEntriesChange(callback: () => void, employeeId?: string): () => void {
+    return this.subscribe('time_entries', callback, employeeId);
   }
 
   /** Fires on any insert/update/delete to time_pauses this person is allowed to see. */
-  onTimePausesChange(callback: () => void): () => void {
-    return this.subscribe('time_pauses', callback);
+  onTimePausesChange(callback: () => void, employeeId?: string): () => void {
+    return this.subscribe('time_pauses', callback, employeeId);
   }
 
-  private subscribe(table: string, callback: () => void): () => void {
+  /** `employeeId` narrows it to that person's rows (server-side), so unrelated changes never arrive. */
+  private subscribe(table: string, callback: () => void, employeeId?: string): () => void {
     let cancelled = false;
     let channel: ReturnType<ReturnType<typeof getSupabaseClient>['channel']> | null = null;
 
@@ -56,7 +57,11 @@ export class RealtimeService {
       if (cancelled) return;
       channel = getSupabaseClient()
         .channel(`${table}_changes_${Math.random().toString(36).slice(2)}`)
-        .on('postgres_changes', { event: '*', schema: 'public', table }, () => callback())
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table, ...(employeeId ? { filter: `employee_id=eq.${employeeId}` } : {}) },
+          () => callback()
+        )
         .subscribe();
     });
 

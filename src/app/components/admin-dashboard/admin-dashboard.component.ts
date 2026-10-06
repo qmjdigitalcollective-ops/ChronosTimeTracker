@@ -630,7 +630,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
           <div class="panel-header">
             <div>
               <h3 class="panel-heading">Real-Time Team Status</h3>
-              <p class="panel-sub">Refreshes every 30 seconds · last checked {{ formatTime(lastRefresh()) }}</p>
+              <p class="panel-sub">Updates live · last checked {{ formatTime(lastRefresh()) }}</p>
             </div>
             <button type="button" class="action-btn" (click)="refreshAllData()">↻ Refresh</button>
           </div>
@@ -3645,7 +3645,14 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     if (tab === 'gallery') this.loadScreenshots();
   }
 
+  private screenshotsLoadedAt = 0;
+
+  /** Every screenshot's full image comes down with this — so reuse what's loaded for a
+   * few minutes instead of re-downloading on every visit to the tab and every action. */
   async loadScreenshots(): Promise<void> {
+    // ponytail: whole-gallery refetch every 5 min; incremental "newer than" needs a range filter in the gate.
+    if (Date.now() - this.screenshotsLoadedAt < 5 * 60_000) return;
+    this.screenshotsLoadedAt = Date.now();
     this.screenshots.set(await this.db.getScreenshots().catch(() => []));
   }
 
@@ -3878,7 +3885,13 @@ export class AdminDashboardComponent implements OnInit, OnDestroy {
     // pausing, or out on another device shows up right away — and this poll just stays on
     // as a quiet safety net in case a Realtime connection ever drops.
     this.refreshTimer = setInterval(() => this.refreshLiveEntries(), 60000);
-    this.unwatchLiveEntries = this.realtime.onTimeEntriesChange(() => this.refreshLiveEntries());
+    // Debounced: a burst of changes (clock-in writes the entry, then the pause log, etc.)
+    // is one re-fetch of the entries table, not one per change.
+    let liveDebounce: ReturnType<typeof setTimeout> | undefined;
+    this.unwatchLiveEntries = this.realtime.onTimeEntriesChange(() => {
+      clearTimeout(liveDebounce);
+      liveDebounce = setTimeout(() => this.refreshLiveEntries(), 2000);
+    });
   }
 
   private unwatchLiveEntries: (() => void) | null = null;

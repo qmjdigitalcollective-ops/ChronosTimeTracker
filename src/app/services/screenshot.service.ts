@@ -114,10 +114,15 @@ export class ScreenshotService {
         const rawBase64 = await window.electronAPI.captureScreen();
         if (rawBase64) {
           const fullJpeg = rawBase64.startsWith('data:') ? rawBase64 : `data:image/jpeg;base64,${rawBase64}`;
-          const now = Date.now();
-          this.lastCapturedUrl.set(fullJpeg);
-          this.lastCapturedTime.set(now);
-          return { full: fullJpeg, thumb: fullJpeg };
+          // The desktop capture used to be stored twice (as itself AND as its own
+          // thumbnail), so the gallery grid downloaded full images. Re-encode both here.
+          const img = new Image();
+          img.src = fullJpeg;
+          await img.decode();
+          const frame = this.encodeFrame(img, img.naturalWidth, img.naturalHeight);
+          this.lastCapturedUrl.set(frame.full);
+          this.lastCapturedTime.set(Date.now());
+          return frame;
         }
       } catch (e) {
         console.error('Electron silent capture error:', e);
@@ -142,22 +147,10 @@ export class ScreenshotService {
           ctx.drawImage(this.videoElement, 0, 0, canvasWidth, canvasHeight);
           this.drawWatermark(ctx, canvasWidth, canvasHeight, meta);
 
-          const fullJpeg = canvas.toDataURL('image/jpeg', 0.75);
-          const thumbScale = Math.min(1, 320 / canvasWidth);
-          const thumbCanvas = document.createElement('canvas');
-          thumbCanvas.width = Math.round(canvasWidth * thumbScale);
-          thumbCanvas.height = Math.round(canvasHeight * thumbScale);
-          const thumbCtx = thumbCanvas.getContext('2d');
-          if (thumbCtx) {
-            thumbCtx.drawImage(canvas, 0, 0, thumbCanvas.width, thumbCanvas.height);
-          }
-          const thumbJpeg = thumbCanvas.toDataURL('image/jpeg', 0.65);
-
-          const now = Date.now();
-          this.lastCapturedUrl.set(fullJpeg);
-          this.lastCapturedTime.set(now);
-
-          return { full: fullJpeg, thumb: thumbJpeg };
+          const frame = this.encodeFrame(canvas, canvasWidth, canvasHeight);
+          this.lastCapturedUrl.set(frame.full);
+          this.lastCapturedTime.set(Date.now());
+          return frame;
         }
       } catch (e) {
         console.error('Canvas capture error:', e);
@@ -166,6 +159,22 @@ export class ScreenshotService {
 
     // 3. Resilient Fallback Snapshot
     return this.generateSimulatedScreenshot(meta);
+  }
+
+  /** Full image (max 1280 wide) plus a real 320-wide thumbnail, as WebP — about a third
+   * smaller than JPEG at the same quality. Falls back to JPEG where the browser can't
+   * encode WebP (it would silently hand back a much bigger PNG instead). */
+  private encodeFrame(source: CanvasImageSource, width: number, height: number): { full: string; thumb: string } {
+    const toUrl = (w: number, quality: number): string => {
+      const scale = Math.min(1, w / width);
+      const c = document.createElement('canvas');
+      c.width = Math.round(width * scale);
+      c.height = Math.round(height * scale);
+      c.getContext('2d')?.drawImage(source, 0, 0, c.width, c.height);
+      const webp = c.toDataURL('image/webp', quality);
+      return webp.startsWith('data:image/webp') ? webp : c.toDataURL('image/jpeg', quality);
+    };
+    return { full: toUrl(1280, 0.7), thumb: toUrl(320, 0.6) };
   }
 
   private drawWatermark(
