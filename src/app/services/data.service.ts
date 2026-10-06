@@ -416,8 +416,14 @@ export class DataService {
     return json;
   }
 
-  private async select(table: string, filter?: Record<string, unknown>): Promise<Row[]> {
-    const res = await this.call({ op: 'select', token: this.getToken(), table, filter });
+  /** `range` narrows on the server: `gte` = column >= value, `in` = column is one of values.
+   * Callers still filter locally too, so an older gate that ignores it stays correct. */
+  private async select(
+    table: string,
+    filter?: Record<string, unknown>,
+    range?: { gte?: Record<string, unknown>; in?: Record<string, unknown[]> }
+  ): Promise<Row[]> {
+    const res = await this.call({ op: 'select', token: this.getToken(), table, filter, ...range });
     return res.data ?? [];
   }
 
@@ -514,9 +520,8 @@ export class DataService {
   async getTimeEntries(filter: { employeeId?: string; since?: number } = {}): Promise<TimeEntry[]> {
     const serverFilter: Record<string, unknown> = {};
     if (filter.employeeId) serverFilter['employee_id'] = filter.employeeId;
-    // "since" is a range, not an equality match — the gate applies equality filters only,
-    // so entries are fetched by employee (or in full, for an admin) and trimmed here.
-    const rows = await this.select('time_entries', serverFilter);
+    // "since" goes to the server as a range, so only that window is downloaded.
+    const rows = await this.select('time_entries', serverFilter, filter.since != null ? { gte: { start_time: filter.since } } : undefined);
     let entries = rows.map(toTimeEntry);
     if (filter.since != null) entries = entries.filter((e) => e.startTime >= filter.since!);
     return entries.sort((a, b) => b.startTime - a.startTime);
@@ -525,7 +530,10 @@ export class DataService {
   async getActiveTimeEntry(employeeId?: string): Promise<TimeEntry | null> {
     const filter: Record<string, unknown> = {};
     if (employeeId) filter['employee_id'] = employeeId;
-    const rows = (await this.select('time_entries', filter)).filter((r) => r['status'] === 'active' || r['status'] === 'paused');
+    // Only the open entry, not this person's whole history (that was every 30s, per person).
+    const rows = (await this.select('time_entries', filter, { in: { status: ['active', 'paused'] } })).filter(
+      (r) => r['status'] === 'active' || r['status'] === 'paused'
+    );
     if (!rows.length) return null;
     rows.sort((a, b) => Number(b['start_time'] ?? 0) - Number(a['start_time'] ?? 0));
     return toTimeEntry(rows[0]);

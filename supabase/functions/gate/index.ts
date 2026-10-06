@@ -77,6 +77,115 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+// ── Screenshot images live in Storage, not in the database row ─────────────
+// They used to be stored as base64 text inside the screenshots table, so every
+// list of screenshots (the gallery, a session's thumbnails) downloaded every full
+// image along with it — the main reason egress blew through the free quota. Now
+// the row only holds "storage:<path>", and reads hand back short-lived signed
+// URLs, so the browser downloads only the images it actually shows: the small
+// thumbnail in a grid, the full one only when clicked. Older rows that still hold
+// base64 keep working unchanged.
+const SCREENSHOT_BUCKET = "screenshots";
+const STORAGE_PREFIX = "storage:";
+const SIGNED_URL_SECONDS = 6 * 3600;
+const SCREENSHOT_IMAGE_COLUMNS = ["image_data_url", "thumbnail_data_url"];
+
+/** Upload any base64 image in this row to Storage and swap in its path. If the
+ * upload fails for any reason the base64 stays as-is — a screenshot is never lost. */
+export async function moveScreenshotImagesToStorage(admin: any, row: Record<string, any>): Promise<void> {
+  for (const col of SCREENSHOT_IMAGE_COLUMNS) {
+    const value = row[col];
+    if (typeof value !== "string") continue;
+
+    // A signed URL this function handed out earlier, being saved back (e.g. a data
+    // import) — store the permanent path again, not the expiring link.
+    const signed = value.match(new RegExp(`/storage/v1/object/sign/${SCREENSHOT_BUCKET}/([^?]+)`));
+    if (signed) {
+      row[col] = STORAGE_PREFIX + decodeURIComponent(signed[1]);
+      continue;
+    }
+
+    const m = value.match(/^data:(image\/[a-z+]+);base64,(.+)$/s);
+    if (!m) continue;
+    const ext = m[1] === "image/jpeg" ? "jpg" : m[1].split("/")[1];
+    const path = `${row.employee_id}/${row.id}${col === "thumbnail_data_url" ? "_thumb" : ""}.${ext}`;
+    const bytes = Uint8Array.from(atob(m[2]), (c) => c.charCodeAt(0));
+    const upload = () =>
+      admin.storage.from(SCREENSHOT_BUCKET).upload(path, bytes, { contentType: m[1], upsert: true, cacheControl: "31536000" });
+
+    let { error } = await upload();
+    if (error && /not found/i.test(error.message)) {
+      // First screenshot ever after this shipped — create the (private) bucket once.
+      await admin.storage.createBucket(SCREENSHOT_BUCKET, { public: false });
+      ({ error } = await upload());
+    }
+    if (!error) row[col] = STORAGE_PREFIX + path;
+  }
+}
+
+/** Replace "storage:<path>" values with signed URLs the browser can load directly. */
+export async function signScreenshotUrls(admin: any, rows: Record<string, any>[]): Promise<void> {
+  const paths = new Set<string>();
+  for (const row of rows) {
+    for (const col of SCREENSHOT_IMAGE_COLUMNS) {
+      const v = row[col];
+      if (typeof v === "string" && v.startsWith(STORAGE_PREFIX)) paths.add(v.slice(STORAGE_PREFIX.length));
+    }
+  }
+  if (!paths.size) return;
+  const { data } = await admin.storage.from(SCREENSHOT_BUCKET).createSignedUrls([...paths], SIGNED_URL_SECONDS);
+  const urlByPath = new Map<string, string>(
+    (data ?? []).filter((d: any) => d.signedUrl).map((d: any) => [d.path, d.signedUrl])
+  );
+  for (const row of rows) {
+    for (const col of SCREENSHOT_IMAGE_COLUMNS) {
+      const v = row[col];
+      if (typeof v === "string" && v.startsWith(STORAGE_PREFIX)) row[col] = urlByPath.get(v.slice(STORAGE_PREFIX.length)) ?? "";
+    }
+  }
+}
+
+function storagePathsOf(rows: Record<string, any>[]): string[] {
+  return rows
+    .flatMap((row) => SCREENSHOT_IMAGE_COLUMNS.map((col) => row[col]))
+    .filter((v): v is string => typeof v === "string" && v.startsWith(STORAGE_PREFIX))
+    .map((v) => v.slice(STORAGE_PREFIX.length));
+}
+
+// ── Screenshots are kept for SCREENSHOT_RETENTION_DAYS, then deleted ────────
+// Free Storage is 1 GB; a full team fills it in a few months. Runs in the background
+// after each screenshot save (there's no scheduler on the free plan) — new screenshots
+// arrive all day, so this keeps up, and a batch limit keeps each run small while it
+// works through any backlog.
+const SCREENSHOT_RETENTION_DAYS = 30;
+const CLEANUP_BATCH = 200;
+
+export async function deleteExpiredScreenshots(admin: any): Promise<void> {
+  const cutoff = Date.now() - SCREENSHOT_RETENTION_DAYS * 24 * 3600 * 1000;
+
+  // 1. Rows whose images are in Storage: remove the files first, then the rows. If
+  //    the files can't be removed, the rows stay so the next run retries — never a
+  //    deleted row with its files orphaned in Storage forever.
+  const { data: stored } = await admin
+    .from("screenshots")
+    .select("id, image_data_url, thumbnail_data_url")
+    .lt("timestamp", cutoff)
+    .or(`image_data_url.like."${STORAGE_PREFIX}*",thumbnail_data_url.like."${STORAGE_PREFIX}*"`)
+    .limit(CLEANUP_BATCH);
+  if (stored?.length) {
+    const { error } = await admin.storage.from(SCREENSHOT_BUCKET).remove(storagePathsOf(stored));
+    if (error) return;
+    await admin.from("screenshots").delete().in("id", stored.map((r: any) => r.id));
+  }
+
+  // 2. Older rows that still hold their image inline (base64) — nothing in Storage,
+  //    so just delete them. Only once step 1 has caught up, so no Storage-backed row
+  //    can ever be deleted here without its files.
+  if ((stored?.length ?? 0) < CLEANUP_BATCH) {
+    await admin.from("screenshots").delete().lt("timestamp", cutoff).not("image_data_url", "like", `${STORAGE_PREFIX}%`);
+  }
+}
+
 function newToken(): string {
   return crypto.randomUUID().replace(/-/g, "") + crypto.randomUUID().replace(/-/g, "");
 }
@@ -562,7 +671,11 @@ Deno.serve(async (req) => {
   }
 
   // ── Everything else needs a valid session token. ────────────────────────────
-  const { token, table, filter, values, id } = body ?? {};
+  // `gte` / `in` are optional range filters ({ column: value } / { column: [values] })
+  // so a read can ask for "entries since Monday" or "only active/paused" instead of
+  // a person's entire history. They only ever NARROW a result — the scoping below
+  // still applies on top. Older app versions don't send them and get the old behavior.
+  const { token, table, filter, values, id, gte, in: inFilter } = body ?? {};
   if (!token || !table || !op) {
     return json({ error: "Missing token, table, or op" }, 400);
   }
@@ -668,12 +781,15 @@ Deno.serve(async (req) => {
       while (true) {
         let q = admin.from(table).select("*").range(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE - 1);
         for (const [k, v] of Object.entries(effectiveFilter)) q = q.eq(k, v as any);
+        for (const [k, v] of Object.entries(gte ?? {})) q = q.gte(k, v as any);
+        for (const [k, v] of Object.entries(inFilter ?? {})) if (Array.isArray(v)) q = q.in(k, v);
         const { data, error } = await q;
         if (error) throw error;
         allRows = allRows.concat(data ?? []);
         if (!data || data.length < PAGE_SIZE) break;
         page++;
       }
+      if (table === "screenshots") await signScreenshotUrls(admin, allRows);
       return json({ data: allRows });
     }
 
@@ -685,7 +801,14 @@ Deno.serve(async (req) => {
           return json({ error: "That record does not belong to you" }, 403);
         }
       }
-      const { data, error } = await admin.from(table).upsert(effectiveValues).select();
+      if (table === "screenshots") {
+        const rows = Array.isArray(effectiveValues) ? effectiveValues : [effectiveValues];
+        await Promise.all(rows.map((row: Record<string, any>) => moveScreenshotImagesToStorage(admin, row)));
+      }
+      // Screenshot rows come back without their image columns: echoing the image the
+      // app just uploaded straight back down was pure egress, and the app ignores it.
+      const returnColumns: string = table === "screenshots" ? "id, time_entry_id, employee_id, timestamp" : "*";
+      const { data, error } = (await admin.from(table).upsert(effectiveValues).select(returnColumns)) as { data: any[] | null; error: any };
       if (error) throw error;
 
       // Status changed on a ClickUp-sourced task — reflect it back on ClickUp too,
@@ -697,6 +820,14 @@ Deno.serve(async (req) => {
         const rt = (globalThis as any).EdgeRuntime;
         if (rt?.waitUntil) rt.waitUntil(pushPromise);
         else await pushPromise;
+      }
+
+      // A new screenshot was saved — clear out any older than the retention window.
+      if (table === "screenshots") {
+        const cleanupPromise = deleteExpiredScreenshots(admin).catch(() => {});
+        const rt3 = (globalThis as any).EdgeRuntime;
+        if (rt3?.waitUntil) rt3.waitUntil(cleanupPromise);
+        else await cleanupPromise;
       }
 
       // A payout was just recorded (Mark Paid) — let that person know by email.
@@ -713,11 +844,30 @@ Deno.serve(async (req) => {
     }
 
     if (op === "delete") {
-      if (!id) return json({ error: "Missing id" }, 400);
-      let q = admin.from(table).delete().eq("id", id);
-      for (const [k, v] of Object.entries(effectiveFilter)) q = q.eq(k, v as any);
-      const { error } = await q;
+      // Deleting by a filter instead of an id (e.g. "all screenshots of this time entry",
+      // which the app sends with an empty id) used to be refused as "Missing id" — which
+      // made deleting a time entry fail before the entry itself was ever deleted. Allowed
+      // now for exactly that one case — never a general "delete everything matching",
+      // and never an empty filter that could turn into "delete the whole table".
+      const isEntryScreenshotCleanup = table === "screenshots" && !!filter?.time_entry_id;
+      if (!id && !isEntryScreenshotCleanup) return json({ error: "Missing id" }, 400);
+      const scope = <T>(q: T): T => {
+        let s: any = q;
+        if (id) s = s.eq("id", id);
+        for (const [k, v] of Object.entries(effectiveFilter)) s = s.eq(k, v as any);
+        return s;
+      };
+
+      // Screenshots: also remove their image files from Storage.
+      let storagePaths: string[] = [];
+      if (table === "screenshots") {
+        const { data: doomed } = await scope(admin.from(table).select(SCREENSHOT_IMAGE_COLUMNS.join(", ")));
+        storagePaths = storagePathsOf((doomed ?? []) as Record<string, any>[]);
+      }
+
+      const { error } = await scope(admin.from(table).delete());
       if (error) throw error;
+      if (storagePaths.length) await admin.storage.from(SCREENSHOT_BUCKET).remove(storagePaths);
       return json({ success: true });
     }
 

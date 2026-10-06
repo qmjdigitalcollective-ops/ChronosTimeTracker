@@ -1807,6 +1807,8 @@ const DAY_MS = 24 * 60 * 60 * 1000;
             <a
               [href]="selectedScreenshot()!.imageDataUrl"
               download="screenshot_{{ selectedScreenshot()!.timestamp }}.jpg"
+              target="_blank"
+              rel="noopener"
               class="download-btn"
             >
               Download Image
