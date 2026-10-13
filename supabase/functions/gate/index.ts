@@ -409,6 +409,102 @@ async function sendPayoutEmail(admin: ReturnType<typeof createClient>, payout: a
   }).catch(() => {});
 }
 
+// ── PAYROLL REPORT (read-only, for an AI agent / finance tool) ───────────────
+// A separate door from the PIN login: it needs its own secret key
+// (PAYROLL_REPORT_KEY, set in Supabase's secret box — never in the app or in chat),
+// can only ever READ, and returns a summary only. No PINs, pay rates, screenshots or
+// session tokens ever leave through it. If the secret isn't set, the door is closed.
+
+const MANILA_OFFSET_MS = 8 * 3600 * 1000; // Pay periods follow Philippine time (UTC+8).
+
+function ymd(y: number, m: number, d: number): string {
+  return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+}
+
+/** The semi-monthly pay period (1st-15th, 16th-end of month) containing a date. Month is 1-12. */
+export function payPeriodContaining(year: number, month: number, day: number): { start: string; end: string } {
+  if (day <= 15) return { start: ymd(year, month, 1), end: ymd(year, month, 15) };
+  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  return { start: ymd(year, month, 16), end: ymd(year, month, lastDay) };
+}
+
+/** The pay period right before the one containing the given date. */
+export function previousPayPeriod(year: number, month: number, day: number): { start: string; end: string } {
+  const cur = payPeriodContaining(year, month, day);
+  const [y, m, d] = cur.start.split("-").map(Number);
+  const before = new Date(Date.UTC(y, m - 1, d - 1));
+  return payPeriodContaining(before.getUTCFullYear(), before.getUTCMonth() + 1, before.getUTCDate());
+}
+
+/** UTC epoch milliseconds for the first and the very last instant of a Manila date range. */
+export function periodBoundsMs(startYmd: string, endYmd: string): { startMs: number; endMs: number } {
+  const [sy, sm, sd] = startYmd.split("-").map(Number);
+  const [ey, em, ed] = endYmd.split("-").map(Number);
+  const startMs = Date.UTC(sy, sm - 1, sd) - MANILA_OFFSET_MS;
+  const endMs = Date.UTC(ey, em - 1, ed + 1) - MANILA_OFFSET_MS - 1;
+  return { startMs, endMs };
+}
+
+/** Compares two strings without stopping at the first different character. */
+export function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/** Pure: turns raw rows into the report. Never touches the database, so it can be tested alone. */
+export function buildPayrollReport(input: {
+  employees: { id: string; name: string }[];
+  entries: any[];
+  approvals: any[];
+  payouts: any[];
+  startMs: number;
+}) {
+  const { employees, entries, approvals, payouts, startMs } = input;
+  const nearStart = (ms: number) => Math.abs(Number(ms) - startMs) <= 12 * 3600 * 1000;
+
+  const rows = employees.map((emp) => {
+    const mine = entries.filter((e) => e.employee_id === emp.id);
+    // A manual entry a team member added themselves counts only once an admin approved it.
+    const counted = mine.filter((e) => e.approval_status == null || e.approval_status === "approved");
+    const pendingManual = mine.filter((e) => e.approval_status === "pending").length;
+    const done = counted.filter((e) => e.status === "completed");
+    const open = counted.filter((e) => e.status === "active" || e.status === "paused");
+    const hours = done.reduce((s, e) => s + Number(e.duration_seconds || 0), 0) / 3600;
+    const earnings = done.reduce((s, e) => s + Number(e.total_pay || 0), 0);
+    const openEarnings = open.reduce((s, e) => s + Number(e.total_pay || 0), 0);
+    const approval = approvals.find((a) => a.employee_id === emp.id && nearStart(a.period_start));
+    const paid = payouts.filter((p) => p.employee_id === emp.id && nearStart(p.period_start));
+    return {
+      employeeId: emp.id,
+      name: emp.name,
+      hours: round2(hours),
+      earnings: round2(earnings),
+      inProgressEarnings: round2(openEarnings),
+      pendingManualEntries: pendingManual,
+      timesheetStatus: approval?.status ?? "not_submitted",
+      paid: paid.length > 0,
+      paidAmount: round2(paid.reduce((s, p) => s + Number(p.amount || 0), 0)),
+      paidAt: paid.length ? Math.max(...paid.map((p) => Number(p.paid_at || 0))) : null,
+    };
+  });
+
+  const shown = rows.filter((r) => r.hours > 0 || r.inProgressEarnings > 0 || r.paid || r.pendingManualEntries > 0);
+  const sum = (f: (r: (typeof rows)[number]) => number) => round2(shown.reduce((s, r) => s + f(r), 0));
+  return {
+    employees: shown,
+    totals: {
+      hours: sum((r) => r.hours),
+      earnings: sum((r) => r.earnings),
+      inProgressEarnings: sum((r) => r.inProgressEarnings),
+      paidAmount: sum((r) => r.paidAmount),
+    },
+  };
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -434,6 +530,85 @@ Deno.serve(async (req) => {
   // nothing but the current time.
   if (op === "server_time") {
     return json({ serverTime: Date.now() });
+  }
+
+  // ── PAYROLL_REPORT: read-only earnings summary for one pay period. ─────────
+  // Body: { op: "payroll_report", reportKey, period?: "current" | "previous",
+  //         periodStart?: "YYYY-MM-DD", periodEnd?: "YYYY-MM-DD" }
+  // Pay periods are the 1st-15th and 16th-end of month, in Philippine time.
+  if (op === "payroll_report") {
+    const configured = Deno.env.get("PAYROLL_REPORT_KEY") ?? "";
+    // Not configured = door closed. Never falls back to "no key needed".
+    if (configured.length < 32) return json({ error: "Report API is not enabled" }, 503);
+
+    // Same wrong-guess lockout the PIN login uses, so the key can't be brute-forced.
+    const lockId = "report-key";
+    const lock = await checkLoginLock(admin, lockId);
+    if (lock.locked) return json({ error: "Too many failed attempts. Try again later." }, 429);
+
+    const supplied = String(body?.reportKey ?? "");
+    if (!safeEqual(supplied, configured)) {
+      await recordLoginResult(admin, lockId, false);
+      return json({ error: "Invalid report key" }, 401);
+    }
+    await recordLoginResult(admin, lockId, true);
+
+    // Work out which pay period to report on.
+    const nowManila = new Date(Date.now() + MANILA_OFFSET_MS);
+    const [cy, cm, cd] = [nowManila.getUTCFullYear(), nowManila.getUTCMonth() + 1, nowManila.getUTCDate()];
+    const dateOk = (v: unknown) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v));
+    let period: { start: string; end: string };
+    if (dateOk(body?.periodStart) && dateOk(body?.periodEnd)) {
+      period = { start: body.periodStart, end: body.periodEnd };
+      if (period.start > period.end) return json({ error: "periodStart must not be after periodEnd" }, 400);
+      const days = (Date.parse(period.end) - Date.parse(period.start)) / 86400000;
+      if (days > 62) return json({ error: "Range too large (max 62 days)" }, 400);
+    } else if (body?.period === "previous") {
+      period = previousPayPeriod(cy, cm, cd);
+    } else {
+      period = payPeriodContaining(cy, cm, cd);
+    }
+    const { startMs, endMs } = periodBoundsMs(period.start, period.end);
+
+    // Only the columns the report needs — never PINs, rates, or screenshot data.
+    const [empRes, entRes, appRes, payRes] = await Promise.all([
+      admin.from("employees").select("id, name").limit(1000),
+      admin
+        .from("time_entries")
+        .select("employee_id, status, duration_seconds, total_pay, approval_status")
+        .gte("start_time", startMs)
+        .lte("start_time", endMs)
+        .limit(10000),
+      admin
+        .from("timesheet_approvals")
+        .select("employee_id, status, period_start")
+        .gte("period_start", startMs - 12 * 3600 * 1000)
+        .lte("period_start", startMs + 12 * 3600 * 1000)
+        .limit(1000),
+      admin
+        .from("payouts")
+        .select("employee_id, amount, paid_at, period_start")
+        .gte("period_start", startMs - 12 * 3600 * 1000)
+        .lte("period_start", startMs + 12 * 3600 * 1000)
+        .limit(1000),
+    ]);
+    const failure = empRes.error || entRes.error || appRes.error || payRes.error;
+    if (failure) return json({ error: "Could not build the report" }, 500);
+
+    const report = buildPayrollReport({
+      employees: empRes.data ?? [],
+      entries: entRes.data ?? [],
+      approvals: appRes.data ?? [],
+      payouts: payRes.data ?? [],
+      startMs,
+    });
+    return json({
+      currency: "PHP",
+      period: { start: period.start, end: period.end, timezone: "Asia/Manila" },
+      generatedAt: new Date().toISOString(),
+      note: "earnings = completed, approved entries only. inProgressEarnings = timers still running or paused.",
+      ...report,
+    });
   }
 
   // ── LOGIN: trade a PIN for a short-lived session token. ────────────────────
