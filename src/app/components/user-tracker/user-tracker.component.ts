@@ -1856,6 +1856,12 @@ export class UserTrackerComponent implements OnInit {
       await this.timerService.clockIn(emp, cli, this.taskDescription());
     } catch (e) {
       console.error('Clock in failed:', e);
+      const msg = String((e as any)?.message ?? '');
+      if (msg.startsWith('Weekly limit reached')) {
+        // Not a connection problem — show the real reason in the banner.
+        this.timerService.limitReachedMessage.set(msg);
+        return;
+      }
       alert('Could not start your timer — the database did not respond. Check your internet connection and try again.');
     }
   }
