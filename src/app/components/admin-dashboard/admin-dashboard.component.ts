@@ -1185,7 +1185,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
                   <th>Pay Rate</th>
                   <th>Bill Rate</th>
                   <th>Margin / hr</th>
-                  <th>This Week</th>
+                  <th title="Hours this week / weekly limit. The timer stops by itself when the limit is reached. Leave empty for no limit.">This Week / Limit (stops timer)</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -1200,10 +1200,10 @@ const DAY_MS = 24 * 60 * 60 * 1000;
                     <td>
                       <span class="duration-num">{{ contractWeekHours(c) | number:'1.1-1' }}h</span>
                       <span class="text-muted"> / </span>
-                      <input type="number" class="inline-input tiny" min="0" [ngModel]="c.weeklyLimitHours ?? ''" (change)="updateContract(c, 'weeklyLimitHours', $any($event.target).value)" placeholder="none" title="Weekly limit (hours)" />
+                      <input type="number" class="inline-input tiny" min="0" [ngModel]="c.weeklyLimitHours ?? ''" (change)="updateContract(c, 'weeklyLimitHours', $any($event.target).value)" placeholder="none" title="Weekly limit in hours for this person on this client. The timer stops by itself when reached." />
                       @if (c.weeklyLimitHours) {
-                        @if (contractWeekHours(c) > c.weeklyLimitHours) {
-                          <span class="over-tag">Over limit</span>
+                        @if (contractWeekHours(c) >= c.weeklyLimitHours) {
+                          <span class="over-tag">Limit reached</span>
                         }
                       }
                     </td>

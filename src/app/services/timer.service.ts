@@ -883,11 +883,78 @@ export class TimerService {
     return Math.max(0, wall);
   }
 
+  /** Set when a running timer was stopped because the weekly client limit was reached. */
+  readonly limitReachedMessage = signal<string | null>(null);
+
+  // Weekly limit for the client of the running entry (in seconds this entry may still add up to).
+  private weekCapFor = '';
+  private weekCapSeconds: number | null = null;
+  private weekCapLoading = false;
+  private weekCapLastTry = 0;
+  private limitStopping = false;
+
+  /** Works out how many seconds the running entry may reach before the contract's weekly
+   * limit for this client is used up (hours already logged this week on OTHER entries count). */
+  private async loadWeekCap(entry: TimeEntry): Promise<void> {
+    this.weekCapLoading = true;
+    this.weekCapLastTry = Date.now();
+    try {
+      const contracts = await this.db.getContracts();
+      const contract = contracts.find((c) => c.employeeId === entry.employeeId && c.clientId === entry.clientId && c.active !== false);
+      let cap: number | null = null;
+      if (contract?.weeklyLimitHours) {
+        const now = new Date();
+        const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+        const weekEntries = await this.db.getTimeEntries({ employeeId: entry.employeeId, since: monday.getTime() });
+        const otherSeconds = weekEntries
+          .filter((e) => e.clientId === entry.clientId && e.id !== entry.id)
+          .reduce((acc, e) => acc + e.durationSeconds, 0);
+        cap = Math.max(0, contract.weeklyLimitHours * 3600 - otherSeconds);
+      }
+      if (this.activeEntry()?.id === entry.id) {
+        this.weekCapSeconds = cap;
+        this.weekCapFor = entry.id;
+      }
+    } catch (e) {
+      console.warn('Could not load weekly limit, will retry', e);
+    } finally {
+      this.weekCapLoading = false;
+    }
+  }
+
+  private async stopForWeeklyLimit(clientName: string): Promise<void> {
+    this.limitStopping = true;
+    try {
+      await this.clockOut();
+      this.limitReachedMessage.set(
+        `Your weekly limit for ${clientName} is reached, so the timer was stopped. Ask Queen if you need more hours.`
+      );
+    } catch (e) {
+      console.error('Auto-stop at weekly limit failed, will retry', e);
+    } finally {
+      this.limitStopping = false;
+    }
+  }
+
   private startTicker(): void {
     this.stopTicker();
     this.lastPersistedSeconds = this.elapsedSeconds();
     this.tickerIntervalId = setInterval(async () => {
       if (this.status() === 'active') {
+        // Weekly client limit: load it once per entry, then stop the timer when it's used up.
+        const running = this.activeEntry();
+        if (running && this.weekCapFor !== running.id) {
+          if (!this.weekCapLoading && Date.now() - this.weekCapLastTry > 30000) this.loadWeekCap(running);
+        } else if (
+          running &&
+          this.weekCapSeconds !== null &&
+          !this.limitStopping &&
+          this.wallElapsedSeconds() >= this.weekCapSeconds
+        ) {
+          this.stopTicker();
+          this.stopForWeeklyLimit(running.clientName);
+          return;
+        }
         // Real clock, not "+1 per tick": browsers throttle or freeze timers in
         // background tabs and during sleep, which made long sessions come up short.
         const nextElapsed = this.wallElapsedSeconds();

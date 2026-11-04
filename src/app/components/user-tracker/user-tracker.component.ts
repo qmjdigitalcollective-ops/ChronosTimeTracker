@@ -152,6 +152,13 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
           </div>
         </div>
 
+        @if (timerService.limitReachedMessage(); as limitMsg) {
+          <div class="device-conflict-banner">
+            <span>{{ limitMsg }}</span>
+            <button type="button" class="btn-take-over" (click)="timerService.limitReachedMessage.set(null)">OK</button>
+          </div>
+        }
+
         @if (timerService.trackedElsewhere()) {
           <div class="device-conflict-banner">
             <span>This timer is already running on your other device — showing it here read-only so the two don't overwrite each other.</span>
