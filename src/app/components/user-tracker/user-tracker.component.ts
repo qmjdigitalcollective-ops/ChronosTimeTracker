@@ -6,7 +6,7 @@ import { TimerService } from '../../services/timer.service';
 import { AuthService } from '../../services/auth.service';
 import { FormatDurationPipe } from '../../pipes/format-duration.pipe';
 import { MoneyPipe } from '../../pipes/money.pipe';
-import { PAUSE_REASONS, PauseReason, Client, MemberPermissions, Payout, TimeEntry, TimesheetApproval, SELF_MANUAL_ENTRY_PREFIX, WorkTask } from '../../models/time-tracker.models';
+import { PAUSE_REASONS, PauseReason, Client, Contract, MemberPermissions, Payout, TimeEntry, TimesheetApproval, SELF_MANUAL_ENTRY_PREFIX, WorkTask } from '../../models/time-tracker.models';
 import { payRateFor } from '../../services/rates';
 import { DEFAULT_MEMBER_PERMISSIONS, effectivePermissions } from '../../services/permissions';
 import { IconComponent } from '../icon/icon.component';
@@ -110,6 +110,18 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
           </div>
         </div>
 
+        @if (limitInfo(); as lim) {
+          <div class="limit-bar" [class.warn]="lim.pct >= 80 && lim.pct < 100" [class.full]="lim.pct >= 100">
+            <div class="limit-bar-text">
+              <span><strong>{{ lim.clientName }}</strong> this week</span>
+              <span class="limit-bar-nums">{{ lim.usedH | number:'1.1-1' }}h of {{ lim.limitH }}h used
+                @if (lim.pct >= 100) { · limit reached } @else { · {{ lim.leftH | number:'1.1-1' }}h left }
+              </span>
+            </div>
+            <div class="limit-bar-track"><div class="limit-bar-fill" [style.width.%]="lim.pct > 100 ? 100 : lim.pct"></div></div>
+          </div>
+        }
+
         <!-- Quick Task Suggestion Chips (when idle) -->
         @if (timerService.status() === 'completed') {
           <div class="suggestions-row">
@@ -153,9 +165,9 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
         </div>
 
         @if (timerService.limitReachedMessage(); as limitMsg) {
-          <div class="device-conflict-banner">
+          <div class="limit-toast" role="alert">
             <span>{{ limitMsg }}</span>
-            <button type="button" class="btn-take-over" (click)="timerService.limitReachedMessage.set(null)">OK</button>
+            <button type="button" (click)="timerService.limitReachedMessage.set(null)">OK</button>
           </div>
         }
 
@@ -1413,6 +1425,31 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
       padding: 10px 12px;
       border-radius: 12px;
     }
+    /* Weekly limit bar */
+    .limit-bar { margin: 0 0 1rem; padding: 0.7rem 0.9rem; border-radius: 12px; background: var(--av-green-bg, rgba(46, 94, 84, 0.08)); border: 1px solid rgba(46, 94, 84, 0.2); }
+    .limit-bar-text { display: flex; justify-content: space-between; gap: 0.5rem; flex-wrap: wrap; font-size: 0.88rem; color: var(--av-text-body); margin-bottom: 0.45rem; }
+    .limit-bar-nums { font-weight: 600; font-variant-numeric: tabular-nums; }
+    .limit-bar-track { height: 8px; border-radius: 999px; background: rgba(0, 0, 0, 0.08); overflow: hidden; }
+    .limit-bar-fill { height: 100%; border-radius: 999px; background: var(--av-green); transition: width 0.4s ease; }
+    .limit-bar.warn { background: var(--av-amber-bg, rgba(217, 160, 40, 0.12)); border-color: var(--av-amber-text); }
+    .limit-bar.warn .limit-bar-fill { background: var(--av-amber-text); }
+    .limit-bar.full { background: rgba(184, 58, 58, 0.1); border-color: var(--av-red-text); }
+    .limit-bar.full .limit-bar-fill { background: var(--av-red-text); }
+    .limit-bar.full .limit-bar-nums { color: var(--av-red-text); }
+
+    /* Alert that floats, so it never pushes the Start button around */
+    .limit-toast {
+      position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 1000;
+      display: flex; align-items: center; gap: 0.9rem; max-width: min(560px, calc(100vw - 32px));
+      background: var(--av-red-text); color: #fff; border-radius: 12px; padding: 0.85rem 1.1rem;
+      font-size: 0.95rem; font-weight: 600; line-height: 1.35; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+    }
+    .limit-toast button { flex-shrink: 0; background: #fff; color: var(--av-red-text); border: none; border-radius: 8px; padding: 0.4rem 0.9rem; font-weight: 700; cursor: pointer; }
+
+    /* Easier-to-read small text */
+    .btn-pin-pill, .suggest-label, .todo-heading, .shift-status-pill, .form-label, .shifts-table th, .slip-link, .eyebrow, .pay-status, .pay-mini, .pay-stat-label { font-size: 0.8rem !important; }
+    .pay-stat-label, .eyebrow, .shifts-table th, .suggest-label { color: var(--av-text-body) !important; }
+    .shifts-table td { font-size: 0.9rem; }
   `],
 })
 export class UserTrackerComponent implements OnInit {
@@ -1531,6 +1568,32 @@ export class UserTrackerComponent implements OnInit {
       console.error('Resume failed:', e);
       alert('Could not resume — the database did not respond. Check your internet connection and try again.');
     }
+  }
+
+  myContracts = signal<Contract[]>([]);
+
+  /** Weekly limit progress for the selected project (null when this person has no limit on it). */
+  limitInfo(): { clientName: string; usedH: number; limitH: number; leftH: number; pct: number } | null {
+    const me = this.authService.currentUser();
+    const clientId = this.selectedClientId();
+    const contract = this.myContracts().find((c) => c.employeeId === me?.id && c.clientId === clientId && c.active !== false);
+    if (!me || !contract?.weeklyLimitHours) return null;
+    const now = new Date();
+    const monday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7)).getTime();
+    const active = this.timerService.activeEntry();
+    let seconds = this.myEntries()
+      .filter((e) => e.clientId === clientId && e.startTime >= monday && e.id !== active?.id)
+      .reduce((acc, e) => acc + e.durationSeconds, 0);
+    if (active && active.clientId === clientId) seconds += this.timerService.elapsedSeconds();
+    const usedH = seconds / 3600;
+    const limitH = contract.weeklyLimitHours;
+    return {
+      clientName: this.clients().find((c) => c.id === clientId)?.name ?? '',
+      usedH,
+      limitH,
+      leftH: Math.max(0, limitH - usedH),
+      pct: Math.round((usedH / limitH) * 100),
+    };
   }
 
   clients = signal<Client[]>([]);
@@ -1810,6 +1873,7 @@ export class UserTrackerComponent implements OnInit {
 
   async loadClients(): Promise<void> {
     const [all, contracts] = await Promise.all([this.db.getClients(), this.db.getContracts()]);
+    this.myContracts.set(contracts);
     // Like WebWork: members only see projects they have a contract on (admins, or members with no contracts, see all)
     const me = this.authService.currentUser();
     const mine = new Set(contracts.filter((c) => c.active && c.employeeId === me?.id).map((c) => c.clientId));
