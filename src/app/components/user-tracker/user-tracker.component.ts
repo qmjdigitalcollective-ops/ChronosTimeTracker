@@ -336,14 +336,9 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
             <span class="pay-stat-label">Pay period hours</span>
             <span class="pay-stat-value">{{ periodSeconds(currentPeriod) / 3600 | number:'1.2-2' }}</span>
           </div>
-          <div class="pay-stat money-item">
-            <span class="pay-stat-label">Pay period earnings</span>
-            <span class="pay-stat-value gold">{{ periodPay(currentPeriod) | money }}</span>
-          </div>
           <div class="pay-stat">
             <span class="pay-stat-label">Last period · {{ lastPeriodLabel }}</span>
             <span class="pay-stat-value small">
-              <span class="money-item">{{ periodPay(lastPeriod) | money }}</span>
               <span class="pay-mini" [attr.data-status]="periodStatus(lastPeriod)">{{ statusLabel(periodStatus(lastPeriod)) }}</span>
               @if (lastPayout(); as paid) {
                 <button type="button" class="slip-link" (click)="payslipFor.set(paid)">View payslip</button>
@@ -388,7 +383,6 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
             <div class="seg">
               <button type="button" [class.active]="historyView() === 'today'" (click)="historyView.set('today')">Today</button>
               <button type="button" [class.active]="historyView() === 'week'" (click)="historyView.set('week')">Week</button>
-              <button type="button" [class.active]="historyView() === 'period'" (click)="historyView.set('period')">Pay period</button>
               <button type="button" [class.active]="historyView() === 'custom'" (click)="historyView.set('custom')">Custom</button>
             </div>
             }
