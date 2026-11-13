@@ -10,10 +10,7 @@
     "test": "ng test",
     "electron": "electron .",
     "build:desktop": "ng build --base-href ./ --output-path dist/desktop",
-    "desktop": "npm run build:desktop && electron .",
-    "dist:mac": "npm run build:desktop && electron-builder --mac",
-    "dist:win": "npm run build:desktop && electron-builder --win",
-    "publish:win": "npm run build:desktop && electron-builder --win --x64 --publish always"
+    "desktop": "npm run build:desktop && electron ."
   },
   "private": true,
   "description": "Auravia Collective time tracker",
@@ -36,7 +33,6 @@
     "@angular/cli": "^22.1.8",
     "@angular/compiler-cli": "^22.1.0",
     "electron": "^44.4.3",
-    "electron-builder": "^25.1.8",
     "jsdom": "^28.0.0",
     "prettier": "^3.8.1",
     "typescript": "~6.0.2",
