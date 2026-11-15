@@ -420,10 +420,21 @@ export class TimerService {
           } else {
             // No live owner elsewhere, and we're not already ticking — claim it and start.
             this.trackedElsewhere.set(false);
-            active.ownerDeviceId = this.deviceId;
-            active.lastTickAt = now;
-            this.db.saveTimeEntry(active).catch(() => {});
-            this.startTicker();
+            const silentMs = active.lastTickAt ? now - active.lastTickAt : 0;
+            if (silentMs > TimerService.OWNER_STALE_MS) {
+              // The app was closed (or the computer slept) with this timer running and
+              // nothing has saved since. Don't count the silent stretch as work: pause at
+              // the last save and let the person press Resume.
+              this.pausedForIdle.set(true);
+              await this.pause('idle', Math.floor(silentMs / 1000));
+              // Show the time frozen at the pause, not the clock time since the start.
+              totalElapsed = this.activeEntry()?.durationSeconds ?? totalElapsed;
+            } else {
+              active.ownerDeviceId = this.deviceId;
+              active.lastTickAt = now;
+              this.db.saveTimeEntry(active).catch(() => {});
+              this.startTicker();
+            }
           }
         } else if (active.status === 'paused' && active.lastPauseTime) {
           // Add extra paused time while page was away
@@ -950,10 +961,27 @@ export class TimerService {
     }
   }
 
+  /** The ticker fires every second. If it comes back this much later, the computer was
+   * asleep (lid closed) or the app was frozen, and the person wasn't working. Browsers
+   * slow background tabs to about once a minute, so this stays well above that. */
+  private static readonly SLEEP_GAP_MS = 5 * 60 * 1000;
+  private lastTickWallMs = 0;
+
   private startTicker(): void {
     this.stopTicker();
     this.lastPersistedSeconds = this.elapsedSeconds();
+    this.lastTickWallMs = Date.now();
     this.tickerIntervalId = setInterval(async () => {
+      const wallNow = Date.now();
+      const gapMs = wallNow - this.lastTickWallMs;
+      this.lastTickWallMs = wallNow;
+      if (this.status() === 'active' && gapMs > TimerService.SLEEP_GAP_MS) {
+        // Pause where the ticker last ran, using the same pause as the 4-minute idle rule:
+        // the away stretch isn't counted and the person presses Resume themselves.
+        this.pausedForIdle.set(true);
+        await this.pause('idle', Math.floor(gapMs / 1000));
+        return;
+      }
       if (this.status() === 'active') {
         // Weekly client limit: load it once per entry, then stop the timer when it's used up.
         const running = this.activeEntry();
