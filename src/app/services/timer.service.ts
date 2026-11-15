@@ -738,10 +738,24 @@ export class TimerService {
     }
   }
 
+  /** True from the moment a clock-out starts until it finishes. A heartbeat save that was
+   * already waiting on the network would otherwise write the old "active" entry over the
+   * finished one (this is how KC's Oct 19 and Nov 14 entries got stuck as Active). */
+  private clockOutInFlight = false;
+
   async clockOut(): Promise<TimeEntry | null> {
     const entry = this.activeEntry();
     if (!entry) return null;
 
+    this.clockOutInFlight = true;
+    try {
+      return await this.clockOutInner(entry);
+    } finally {
+      this.clockOutInFlight = false;
+    }
+  }
+
+  private async clockOutInner(entry: TimeEntry): Promise<TimeEntry | null> {
     this.clearIdleWarning();
     this.stopTicker();
     await this.ensureServerOffset();
@@ -973,7 +987,7 @@ export class TimerService {
           // Paused/clocked out while that read was in flight — saving now would write the
           // stale "active" entry over the pause and make it snap back.
           const entry = this.activeEntry();
-          if (this.status() !== 'active' || this.pauseResumeInFlight() || !entry || entry.id !== entryId) return;
+          if (this.status() !== 'active' || this.pauseResumeInFlight() || this.clockOutInFlight || !entry || entry.id !== entryId) return;
           if (
             latest &&
             latest.ownerDeviceId &&
