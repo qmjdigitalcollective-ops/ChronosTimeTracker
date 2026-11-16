@@ -243,6 +243,11 @@ export class TimerService {
 
     const goIdle = (awaySeconds: number) => {
       if (this.status() !== 'active') return;
+      // Only the page that is actually driving this timer may auto-pause it. Another
+      // tab or window that happens to be open (and idle) must not stop it — that
+      // paused KC's timer one second after she resumed it.
+      const owner = this.activeEntry()?.ownerDeviceId;
+      if (this.trackedElsewhere() || (owner && owner !== this.deviceId)) return;
       this.clearIdleWarning();
       this.pausedForIdle.set(true);
       this.pause('idle', awaySeconds);
