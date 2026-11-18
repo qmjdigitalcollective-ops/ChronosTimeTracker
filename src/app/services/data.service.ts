@@ -450,6 +450,12 @@ export class DataService {
     return { employee: toEmployee(res.employee), isAdmin: !!res.isAdmin, supabaseSession: res.supabaseSession ?? null };
   }
 
+  /** Asks the gate to email the owner their PIN. The answer is always the same, so it
+   * never reveals whether an address exists. */
+  async forgotPin(email: string): Promise<void> {
+    await this.call({ op: 'forgot_pin', email });
+  }
+
   async loginAdmin(pin: string): Promise<LoginResult> {
     const res = await this.call({ op: 'login_admin', pin });
     this.setToken(res.token);

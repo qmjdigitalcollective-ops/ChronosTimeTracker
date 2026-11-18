@@ -409,6 +409,29 @@ async function sendPayoutEmail(admin: ReturnType<typeof createClient>, payout: a
   }).catch(() => {});
 }
 
+async function sendPinEmail(employee: any): Promise<void> {
+  const key = Deno.env.get("RESEND_API_KEY");
+  if (!key) return;
+  const html = `
+    <div style="font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 480px; margin: 0 auto; color: #1b2b28;">
+      <h2 style="color: #063c35; margin-bottom: 4px;">Your Time Tracker PIN</h2>
+      <p>You asked for your PIN. Here it is:</p>
+      <p style="font-size: 32px; letter-spacing: 8px; font-weight: 700; background: #f4f1ea; padding: 14px 18px; border-radius: 10px; display: inline-block;">${String(employee.pin)}</p>
+      <p>Sign in with your email and this PIN. Then delete this email.</p>
+      <p style="color: #999; font-size: 13px; margin-top: 28px;">Didn't ask for this? You can ignore it, nobody else can see it.</p>
+    </div>`;
+  await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      from: "Auravia Collective <no-reply@mail.auraviacollective.com>",
+      to: employee.email,
+      subject: "Your Time Tracker PIN",
+      html,
+    }),
+  }).catch(() => {});
+}
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
@@ -434,6 +457,27 @@ Deno.serve(async (req) => {
   // nothing but the current time.
   if (op === "server_time") {
     return json({ serverTime: Date.now() });
+  }
+
+  // ── FORGOT_PIN: email a person their own PIN. ──────────────────────────────
+  // Anyone with an active account, but only ever to the email already saved on that
+  // account — so someone typing a stranger's address gets nothing, and nobody
+  // can learn from the answer whether an address exists (it is always the same).
+  // Counts toward the same lockout as logins (5 requests, then 15 minutes).
+  if (op === "forgot_pin") {
+    const typed = String(body?.email ?? "").trim().toLowerCase();
+    const reply = { ok: true, message: "If that email has an account, the PIN was sent to it." };
+    if (!typed || typed.length > 200) return json(reply);
+
+    const lockIdentifier = "forgot:" + typed;
+    if ((await checkLoginLock(admin, lockIdentifier)).locked) return json(reply);
+    await recordLoginResult(admin, lockIdentifier, false);
+
+    const { data: employee } = await admin.from("employees").select("*").ilike("email", typed).maybeSingle();
+    if (employee && employee.active !== false && employee.pin) {
+      await sendPinEmail(employee);
+    }
+    return json(reply);
   }
 
   // ── LOGIN: trade a PIN for a short-lived session token. ────────────────────

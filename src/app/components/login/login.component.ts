@@ -53,8 +53,15 @@ import { AuthService } from '../../services/auth.service';
             </div>
           }
 
+          @if (infoMessage()) {
+            <div class="info-banner">{{ infoMessage() }}</div>
+          }
+
           <button type="submit" class="btn-submit" [disabled]="loading()">
             {{ loading() ? 'Signing in…' : 'Sign In' }}
+          </button>
+          <button type="button" class="link-forgot" (click)="onForgot()" [disabled]="loading()">
+            Forgot PIN? Email it to me
           </button>
         </form>
 
@@ -164,6 +171,25 @@ import { AuthService } from '../../services/auth.service';
       background: linear-gradient(135deg, var(--av-forest-hover), var(--av-forest-deep));
       transform: translateY(-1px);
     }
+    .info-banner {
+      background: rgba(6, 60, 53, 0.08);
+      border: 1px solid rgba(6, 60, 53, 0.25);
+      color: var(--av-text);
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 0.85rem;
+    }
+    .link-forgot {
+      background: none;
+      border: none;
+      color: var(--av-forest);
+      font-size: 0.85rem;
+      cursor: pointer;
+      text-decoration: underline;
+      padding: 4px;
+      align-self: center;
+    }
+    .link-forgot:disabled { opacity: 0.6; cursor: not-allowed; }
     .btn-submit:disabled {
       opacity: 0.6;
       cursor: not-allowed;
@@ -243,8 +269,28 @@ export class LoginComponent {
   pin = '';
   errorMessage = signal<string | null>(null);
   loading = signal<boolean>(false);
+  infoMessage = signal<string | null>(null);
 
   constructor(private authService: AuthService) { }
+
+  async onForgot(): Promise<void> {
+    this.errorMessage.set(null);
+    this.infoMessage.set(null);
+    const typed = this.username.trim();
+    if (!typed.includes('@')) {
+      this.errorMessage.set('Type your email in the first box, then press "Forgot PIN?".');
+      return;
+    }
+    this.loading.set(true);
+    try {
+      await this.authService.forgotPin(typed);
+      this.infoMessage.set('If that email has an account, your PIN was sent to it. Check your inbox (and spam).');
+    } catch {
+      this.errorMessage.set('Could not reach the server. Check your internet connection and try again.');
+    } finally {
+      this.loading.set(false);
+    }
+  }
 
   async onSubmit(event: Event): Promise<void> {
     event.preventDefault();

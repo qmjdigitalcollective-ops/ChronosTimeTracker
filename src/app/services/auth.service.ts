@@ -98,6 +98,10 @@ export class AuthService {
     }
   }
 
+  forgotPin(email: string): Promise<void> {
+    return this.db.forgotPin(email);
+  }
+
   async loginByUsername(username: string, pin?: string): Promise<{ success: boolean; message: string }> {
     if (!username || !username.trim()) {
       return { success: false, message: 'Please enter your email or Employee ID.' };
