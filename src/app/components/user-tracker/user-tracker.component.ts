@@ -39,25 +39,6 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
           </div>
         </div>
 
-        <!-- My To-Do (from ClickUp, or added by an admin) -->
-        @if (myOpenTasks().length > 0) {
-          <div class="todo-panel">
-            <span class="todo-heading">My To-Do</span>
-            @for (t of myOpenTasks(); track t.id) {
-              <div class="todo-row" [class.in-progress]="t.status === 'in_progress'">
-                <span class="todo-title">{{ t.title }}</span>
-                @if (t.clientName) { <span class="client-badge todo-client">{{ t.clientName }}</span> }
-                <div class="todo-actions">
-                  @if (t.status !== 'in_progress') {
-                    <button type="button" class="btn-sm" [disabled]="timerService.status() !== 'completed'" (click)="startTask(t)">Start</button>
-                  }
-                  <button type="button" class="btn-sm" (click)="markTaskDone(t)">Done</button>
-                </div>
-              </div>
-            }
-          </div>
-        }
-
         <!-- Task & Client Selection -->
         <div class="selection-grid">
           <div class="form-group">
