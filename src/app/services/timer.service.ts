@@ -580,6 +580,15 @@ export class TimerService {
       }
     }
 
+    // A client can also have a limit shared by the whole team over a period (Entry Level:
+    // 80h per 2 weeks). It's worked out on the server, since people only see their own entries.
+    const shared = await this.db.getClientPeriodUsage(client.id);
+    if (shared && shared.usedSeconds >= shared.limitHours * 3600) {
+      throw new Error(
+        `Team limit reached for ${client.name} (${shared.limitHours}h this period). Ask an admin to raise it if this is expected.`
+      );
+    }
+
     const cleanTask = taskDescription.trim() || 'General work';
 
     this.intervalMinutes = settings.screenshotIntervalMinutes || 10;
@@ -919,6 +928,7 @@ export class TimerService {
   // Weekly limit for the client of the running entry (in seconds this entry may still add up to).
   private weekCapFor = '';
   private weekCapSeconds: number | null = null;
+  private weekCapKind: 'weekly' | 'team' = 'weekly';
   private weekCapLoading = false;
   private weekCapLastTry = 0;
   private limitStopping = false;
@@ -941,8 +951,20 @@ export class TimerService {
           .reduce((acc, e) => acc + e.durationSeconds, 0);
         cap = Math.max(0, contract.weeklyLimitHours * 3600 - otherSeconds);
       }
+      // The team limit on this client (everyone's hours this period, minus this entry which
+      // is counted live) can be tighter than the person's own weekly limit — the lower one wins.
+      let kind: 'weekly' | 'team' = 'weekly';
+      const shared = await this.db.getClientPeriodUsage(entry.clientId, entry.id);
+      if (shared) {
+        const sharedCap = Math.max(0, shared.limitHours * 3600 - shared.usedSeconds);
+        if (cap === null || sharedCap < cap) {
+          cap = sharedCap;
+          kind = 'team';
+        }
+      }
       if (this.activeEntry()?.id === entry.id) {
         this.weekCapSeconds = cap;
+        this.weekCapKind = kind;
         this.weekCapFor = entry.id;
       }
     } catch (e) {
@@ -957,7 +979,9 @@ export class TimerService {
     try {
       await this.clockOut();
       this.limitReachedMessage.set(
-        `Your weekly limit for ${clientName} is reached, so the timer was stopped. Ask Queen if you need more hours.`
+        this.weekCapKind === 'team'
+          ? `The team's hours for ${clientName} are used up for this period, so the timer was stopped. Ask Queen if you need more hours.`
+          : `Your weekly limit for ${clientName} is reached, so the timer was stopped. Ask Queen if you need more hours.`
       );
     } catch (e) {
       console.error('Auto-stop at weekly limit failed, will retry', e);

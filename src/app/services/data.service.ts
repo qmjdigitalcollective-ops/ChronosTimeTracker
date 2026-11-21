@@ -577,6 +577,24 @@ export class DataService {
     }
   }
 
+  /**
+   * The whole team's hours on one client in its current period (a shared limit such as
+   * Entry Level's 80h per 2 weeks), or null when that client has no shared limit. Returns
+   * null on any error too, so a hiccup here can never stop someone from clocking in.
+   */
+  async getClientPeriodUsage(
+    clientId: string,
+    excludeEntryId?: string
+  ): Promise<{ limitHours: number; usedSeconds: number } | null> {
+    try {
+      const res = await this.call({ op: 'client_period_usage', token: this.getToken(), clientId, excludeEntryId });
+      if (!res?.limitHours) return null;
+      return { limitHours: Number(res.limitHours), usedSeconds: Number(res.usedSeconds) || 0 };
+    } catch {
+      return null;
+    }
+  }
+
   async getTimeEntryById(id: string): Promise<TimeEntry | null> {
     const row = await this.selectOne('time_entries', { id });
     return row ? toTimeEntry(row) : null;

@@ -714,6 +714,37 @@ Deno.serve(async (req) => {
     });
   }
 
+  // ── CLIENT_PERIOD_USAGE: hours the WHOLE team has used on one client in its current
+  // period (e.g. Entry Level: 80h per 2 weeks, shared). Employees can only read their own
+  // entries, so this is worked out here and only a total goes back — nobody else's rows.
+  // Pending (unapproved) entries don't count, same as for pay. `excludeEntryId` lets the
+  // caller leave out its own running entry, which it counts live.
+  if (op === "client_period_usage") {
+    const { token: uToken, clientId, excludeEntryId } = body ?? {};
+    if (!uToken || !clientId) return json({ error: "Missing token or clientId" }, 400);
+    if (!(await lookupSession(admin, uToken))) return json({ error: "Session expired or invalid" }, 401);
+
+    const { data: client } = await admin
+      .from("clients").select("period_limit_hours, period_start, period_days").eq("id", clientId).maybeSingle();
+    if (!client?.period_limit_hours || !client.period_start) return json({ limitHours: null });
+
+    const DAY = 86400000;
+    const span = (Number(client.period_days) || 14) * DAY;
+    const anchor = Date.parse(`${client.period_start}T00:00:00+08:00`); // Manila midnight
+    if (Number.isNaN(anchor) || Date.now() < anchor) return json({ limitHours: null });
+    const windowStart = anchor + Math.floor((Date.now() - anchor) / span) * span;
+    const windowEnd = windowStart + span;
+
+    const { data: rows } = await admin
+      .from("time_entries").select("id, duration_seconds, approval_status")
+      .eq("client_id", clientId).gte("start_time", windowStart).lt("start_time", windowEnd);
+    const usedSeconds = (rows ?? [])
+      .filter((r: any) => r.id !== excludeEntryId && r.approval_status !== "pending")
+      .reduce((acc: number, r: any) => acc + (Number(r.duration_seconds) || 0), 0);
+
+    return json({ limitHours: Number(client.period_limit_hours), windowStart, windowEnd, usedSeconds });
+  }
+
   // ── Everything else needs a valid session token. ────────────────────────────
   // `gte` / `in` are optional range filters ({ column: value } / { column: [values] })
   // so a read can ask for "entries since Monday" or "only active/paused" instead of

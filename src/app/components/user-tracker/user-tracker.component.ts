@@ -1915,7 +1915,7 @@ export class UserTrackerComponent implements OnInit {
     } catch (e) {
       console.error('Clock in failed:', e);
       const msg = String((e as any)?.message ?? '');
-      if (msg.startsWith('Weekly limit reached')) {
+      if (msg.startsWith('Weekly limit reached') || msg.startsWith('Team limit reached')) {
         // Not a connection problem — show the real reason in the banner.
         this.timerService.limitReachedMessage.set(msg);
         return;
