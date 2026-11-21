@@ -22,20 +22,11 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
     <div class="tracker-page" [class.no-money]="!perms().showEarnings" [class.no-pay-panel]="!perms().showPayPanel">
       <!-- Main Tracking Card -->
       <div class="tracker-card">
-        <!-- User Info Strip (Locked to Logged In User) -->
+        <!-- Greeting + status -->
         <div class="user-strip">
-          <div class="user-profile">
-            <div class="avatar" [style.background]="authService.currentUser()?.avatarColor || '#a87c2c'">
-              {{ getInitials(authService.currentUser()?.name) }}
-            </div>
-            <div>
-              <div class="user-name">
-                <span>{{ authService.currentUser()?.name }}</span>
-              </div>
-              <div class="user-role-badge">
-                {{ authService.currentUser()?.department || 'Team member' }}
-              </div>
-            </div>
+          <div class="greeting">
+            <span class="greeting-date">{{ todayLabel }}</span>
+            <span class="greeting-name">{{ greeting() }}</span>
           </div>
 
           <div class="shift-status-pill" [ngClass]="timerService.status()">
@@ -110,29 +101,6 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
           </div>
         </div>
 
-        @if (limitInfo(); as lim) {
-          <div class="limit-bar" [class.warn]="lim.pct >= 80 && lim.pct < 100" [class.full]="lim.pct >= 100">
-            <div class="limit-bar-text">
-              <span><strong>{{ lim.clientName }}</strong> this week</span>
-              <span class="limit-bar-nums">{{ lim.usedH | number:'1.1-1' }}h of {{ lim.limitH }}h used
-                @if (lim.pct >= 100) { · limit reached } @else { · {{ lim.leftH | number:'1.1-1' }}h left }
-              </span>
-            </div>
-            <div class="limit-bar-track"><div class="limit-bar-fill" [style.width.%]="lim.pct > 100 ? 100 : lim.pct"></div></div>
-          </div>
-        }
-
-        <!-- Quick Task Suggestion Chips (when idle) -->
-        @if (timerService.status() === 'completed') {
-          <div class="suggestions-row">
-            <span class="suggest-label">Suggestions:</span>
-            <button type="button" class="chip" (click)="taskDescription.set('Client work')">Client work</button>
-            <button type="button" class="chip" (click)="taskDescription.set('Content creation')">Content</button>
-            <button type="button" class="chip" (click)="taskDescription.set('Admin & emails')">Admin & emails</button>
-            <button type="button" class="chip" (click)="taskDescription.set('Client Sync & Project Planning')">Meeting</button>
-          </div>
-        }
-
         <!-- Big Timer Display -->
         <div class="timer-display-wrap">
           <div class="timer-digits">
@@ -141,12 +109,6 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
 
           <div class="session-sub-info">
             @if (timerService.status() === 'active' || timerService.status() === 'paused') {
-              <span class="money-item">
-                Earned this session:
-                <strong class="earned-text">
-                  {{ calculateEarned(timerService.elapsedSeconds()) | money }}
-                </strong>
-              </span>
               @if (timerService.pausedSeconds() > 0) {
                 <span class="paused-text">
                   • Paused: {{ timerService.pausedSeconds() | formatDuration }}
@@ -304,6 +266,37 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
         </div>
       }
 
+      <div class="side-col">
+      <!-- This week: hours by day and by project (hours only), plus the week's earnings -->
+      <div class="week-card">
+        <div class="week-head">
+          <div>
+            <span class="eyebrow">This week · {{ weekLabel }}</span>
+            <div class="week-hours">{{ weekTotalHours() | number:'1.1-1' }} h</div>
+          </div>
+          <div class="week-earn-box money-item">
+            <span class="eyebrow">Week earnings</span>
+            <div class="week-earn-amount">{{ periodPay(thisWeek) | money }}</div>
+          </div>
+        </div>
+        <div class="week-bars">
+          @for (d of weekDays(); track d.label) {
+            <div class="week-bar-col" [class.today]="d.today">
+              <span class="week-bar-val">{{ d.hours > 0 ? (d.hours | number:'1.1-1') : '' }}</span>
+              <div class="week-bar-slot"><div class="week-bar" [style.height.%]="d.pct"></div></div>
+              <span class="week-bar-day">{{ d.label }}</span>
+            </div>
+          }
+        </div>
+        @if (weekByProject().length > 0) {
+          <div class="week-projects">
+            @for (p of weekByProject(); track p.name) {
+              <div class="week-project-row"><span>{{ p.name }}</span><span>{{ p.hours | number:'1.1-1' }} h</span></div>
+            }
+          </div>
+        }
+      </div>
+
       <!-- My pay period (what I've earned and whether it's been paid) -->
       @if (perms().showPayPanel) {
       <div class="pay-card">
@@ -325,13 +318,6 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
           </div>
         }
         <div class="pay-stats">
-          <div class="pay-stat week">
-            <span class="pay-stat-label">This week · {{ weekLabel }}</span>
-            <span class="pay-stat-value small">
-              {{ periodSeconds(thisWeek) / 3600 | number:'1.2-2' }} hrs
-              <span class="week-earn money-item">{{ periodPay(thisWeek) | money }}</span>
-            </span>
-          </div>
           <div class="pay-stat">
             <span class="pay-stat-label">Pay period hours</span>
             <span class="pay-stat-value">{{ periodSeconds(currentPeriod) / 3600 | number:'1.2-2' }}</span>
@@ -373,6 +359,7 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
         }
       </div>
       }
+      </div>
 
       <!-- Today's Work Summary (Only for the logged in user) -->
       <div class="history-card">
@@ -408,10 +395,6 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
               <span class="stat-label">{{ historyView() === 'today' ? 'Time today' : 'Total time' }}</span>
               <span class="stat-value">{{ calculateUserTodaySeconds() | formatDuration }}</span>
             </div>
-            <div class="total-stat money-item">
-              <span class="stat-label">Earnings</span>
-              <span class="stat-value highlight">{{ calculateUserTodayEarnings() | money }}</span>
-            </div>
           </div>
         </div>
 
@@ -432,7 +415,6 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
                   <th>Start</th>
                   <th>End</th>
                   <th>Duration</th>
-                  <th class="money-item">Earnings</th>
                 </tr>
               </thead>
               <tbody>
@@ -448,7 +430,6 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
                     <td>{{ formatTime(entry.startTime) }}</td>
                     <td>{{ entry.endTime ? formatTime(entry.endTime) : 'In Progress' }}</td>
                     <td class="duration-cell">{{ entry.durationSeconds | formatDuration }}</td>
-                    <td class="pay-cell money-item">{{ entry.totalPay | money }}</td>
                   </tr>
                 }
               </tbody>
@@ -1444,6 +1425,58 @@ import { formatPeriod, payPeriodFor, previousPayPeriod } from '../../services/pa
     .btn-pin-pill, .suggest-label, .todo-heading, .shift-status-pill, .form-label, .shifts-table th, .slip-link, .eyebrow, .pay-status, .pay-mini, .pay-stat-label { font-size: 0.8rem !important; }
     .pay-stat-label, .eyebrow, .shifts-table th, .suggest-label { color: var(--av-text-body) !important; }
     .shifts-table td { font-size: 0.9rem; }
+
+    /* ── Premium team screen ───────────────────────────────────────── */
+    .side-col { grid-column: 2; display: flex; flex-direction: column; gap: 1.25rem; min-width: 0; }
+    @media (max-width: 1000px) { .side-col { grid-column: 1; } }
+    .greeting { display: flex; flex-direction: column; gap: 2px; }
+    .greeting-date { font-size: 0.68rem; letter-spacing: 0.16em; color: #d9b66a; font-weight: 600; }
+    .greeting-name { font-family: var(--av-font-heading); font-size: 1.5rem; line-height: 1.2; color: #f4f1ea; }
+    .tracker-card { background: #063c35; border-color: #063c35; color: #f4f1ea; }
+    .tracker-card .form-label { color: rgba(244, 241, 234, 0.72); }
+    .tracker-card .form-select, .tracker-card .form-input {
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px solid rgba(244, 241, 234, 0.28);
+      color: #f4f1ea;
+    }
+    .tracker-card .form-select option { color: #1b2b28; background: #fff; }
+    .tracker-card .form-input::placeholder { color: rgba(244, 241, 234, 0.5); }
+    .tracker-card .form-select:focus, .tracker-card .form-input:focus { border-color: #d9b66a; }
+    .tracker-card .timer-display-wrap { background: transparent; border: none; }
+    .tracker-card .timer-digits { color: #f4f1ea; font-size: 4.4rem; }
+    .tracker-card .idle-text, .tracker-card .paused-text, .tracker-card .session-sub-info { color: rgba(244, 241, 234, 0.72); }
+    .tracker-card .btn-clock-in, .tracker-card .btn-resume, .tracker-card .btn-clock-out {
+      background: #d9b66a; color: #063c35; box-shadow: none;
+    }
+    .tracker-card .btn-clock-in:hover, .tracker-card .btn-resume:hover, .tracker-card .btn-clock-out:hover { background: #e4c883; }
+    .tracker-card .btn-pause {
+      background: transparent; color: #f4f1ea; border: 1px solid rgba(244, 241, 234, 0.5); box-shadow: none;
+    }
+    .tracker-card .btn-add-time { color: rgba(244, 241, 234, 0.75); }
+    .tracker-card .btn-add-time:hover { color: #fff; }
+    .tracker-card .todo-panel { background: rgba(255, 255, 255, 0.08); border-color: rgba(244, 241, 234, 0.2); color: #f4f1ea; }
+    .tracker-card .todo-heading, .tracker-card .todo-title { color: #f4f1ea; }
+    .week-card {
+      background: var(--av-surface);
+      border: 1px solid var(--av-border);
+      border-radius: 20px;
+      box-shadow: 0 1px 2px rgba(6, 60, 53, 0.04), 0 18px 40px -24px rgba(6, 60, 53, 0.22);
+      padding: 1.25rem 1.4rem;
+    }
+    .week-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem; flex-wrap: wrap; }
+    .week-hours { font-family: var(--av-font-heading); font-size: 2rem; color: var(--av-forest); line-height: 1.15; margin-top: 2px; }
+    .week-earn-box { text-align: right; }
+    .week-earn-amount { font-family: var(--av-font-heading); font-size: 1.5rem; color: var(--av-forest); margin-top: 2px; }
+    .week-bars { display: flex; align-items: flex-end; gap: 0.6rem; margin: 1rem 0 0.6rem; }
+    .week-bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; min-width: 0; }
+    .week-bar-val { font-size: 0.72rem; color: var(--av-text-muted); height: 1em; font-variant-numeric: tabular-nums; }
+    .week-bar-slot { width: 100%; height: 84px; display: flex; align-items: flex-end; border-bottom: 1px solid var(--av-border); }
+    .week-bar { width: 100%; background: #063c35; border-radius: 4px 4px 0 0; min-height: 0; transition: height 0.3s ease; }
+    .week-bar-col.today .week-bar { background: #d9b66a; }
+    .week-bar-day { font-size: 0.72rem; color: var(--av-text-muted); letter-spacing: 0.04em; }
+    .week-bar-col.today .week-bar-day { color: var(--av-forest); font-weight: 600; }
+    .week-projects { border-top: 1px solid var(--av-border); padding-top: 0.7rem; display: flex; flex-direction: column; gap: 4px; }
+    .week-project-row { display: flex; justify-content: space-between; font-size: 0.88rem; color: var(--av-text-body); }
   `],
 })
 export class UserTrackerComponent implements OnInit {
@@ -1565,6 +1598,59 @@ export class UserTrackerComponent implements OnInit {
   }
 
   myContracts = signal<Contract[]>([]);
+
+  readonly todayLabel = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }).toUpperCase();
+
+  greeting(): string {
+    const hour = new Date().getHours();
+    const first = (this.authService.currentUser()?.name ?? '').trim().split(/\s+/)[0] || 'there';
+    return `${hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'}, ${first}`;
+  }
+
+  /** This week's countable seconds per day (Mon–Sun) and per project. The running entry is
+   * counted live from the timer, not from its last saved duration. */
+  private weekSeconds(): { perDay: number[]; perProject: Map<string, number> } {
+    const [monday] = this.thisWeek;
+    const active = this.timerService.activeEntry();
+    const perDay = new Array(7).fill(0);
+    const perProject = new Map<string, number>();
+    const add = (startTime: number, clientName: string, seconds: number) => {
+      const day = new Date(startTime);
+      day.setHours(0, 0, 0, 0);
+      const idx = Math.round((day.getTime() - monday.getTime()) / 86400000);
+      if (idx < 0 || idx > 6) return;
+      perDay[idx] += seconds;
+      perProject.set(clientName, (perProject.get(clientName) ?? 0) + seconds);
+    };
+    for (const e of this.myEntries()) {
+      if (!this.isCountable(e) || e.id === active?.id) continue;
+      add(e.startTime, e.clientName, e.durationSeconds);
+    }
+    if (active) add(active.startTime, active.clientName, this.timerService.elapsedSeconds());
+    return { perDay, perProject };
+  }
+
+  weekDays(): { label: string; hours: number; pct: number; today: boolean }[] {
+    const { perDay } = this.weekSeconds();
+    const maxSeconds = Math.max(3600, ...perDay);
+    const todayIdx = (new Date().getDay() + 6) % 7;
+    return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map((label, i) => ({
+      label,
+      hours: perDay[i] / 3600,
+      pct: perDay[i] > 0 ? Math.max(4, Math.round((perDay[i] / maxSeconds) * 100)) : 0,
+      today: i === todayIdx,
+    }));
+  }
+
+  weekByProject(): { name: string; hours: number }[] {
+    return [...this.weekSeconds().perProject.entries()]
+      .map(([name, seconds]) => ({ name, hours: seconds / 3600 }))
+      .sort((a, b) => b.hours - a.hours);
+  }
+
+  weekTotalHours(): number {
+    return this.weekSeconds().perDay.reduce((a, b) => a + b, 0) / 3600;
+  }
 
   /** Weekly limit progress for the selected project (null when this person has no limit on it). */
   limitInfo(): { clientName: string; usedH: number; limitH: number; leftH: number; pct: number } | null {
@@ -1916,8 +2002,8 @@ export class UserTrackerComponent implements OnInit {
       console.error('Clock in failed:', e);
       const msg = String((e as any)?.message ?? '');
       if (msg.startsWith('Weekly limit reached') || msg.startsWith('Team limit reached')) {
-        // Not a connection problem — show the real reason in the banner.
-        this.timerService.limitReachedMessage.set(msg);
+        // Not a connection problem, but the team isn't told about limits: keep the wording neutral.
+        this.timerService.limitReachedMessage.set("You can't start this project right now. Please message Queen.");
         return;
       }
       alert('Could not start your timer — the database did not respond. Check your internet connection and try again.');

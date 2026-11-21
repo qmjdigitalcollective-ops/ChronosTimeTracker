@@ -980,8 +980,8 @@ export class TimerService {
       await this.clockOut();
       this.limitReachedMessage.set(
         this.weekCapKind === 'team'
-          ? `The team's hours for ${clientName} are used up for this period, so the timer was stopped. Ask Queen if you need more hours.`
-          : `Your weekly limit for ${clientName} is reached, so the timer was stopped. Ask Queen if you need more hours.`
+          ? `Your ${clientName} timer was stopped. Please message Queen.`
+          : `Your ${clientName} timer was stopped. Please message Queen.`
       );
     } catch (e) {
       console.error('Auto-stop at weekly limit failed, will retry', e);
